@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Deploy state (local-only device IDs, per-host configs)
+deploy/state/
+deploy/*.local.*
+*.log

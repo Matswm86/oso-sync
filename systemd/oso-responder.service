@@ -1,0 +1,22 @@
+[Unit]
+Description=OsO Sync — ollama-obsidian responder (watches synced notes/ask/)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# `%h` is the systemd specifier for the user's home directory, so this
+# unit works for any user without editing the path.
+EnvironmentFile=-/etc/oso-sync/obsidian.env
+WorkingDirectory=%h/services/responder
+ExecStart=/usr/bin/python3 %h/services/responder/responder.py
+StandardOutput=journal
+StandardError=journal
+Nice=10
+
+# User-scope-safe hardening only.
+# System-scope hardening like ProtectKernel*, MemoryDenyWriteExecute, and
+# RestrictSUIDSGID requires capabilities that user-scope systemd cannot
+# apply (status=218/CAPABILITIES). User scope already isolates by uid.
+NoNewPrivileges=true
+PrivateTmp=true
