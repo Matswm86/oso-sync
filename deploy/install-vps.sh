@@ -66,13 +66,13 @@ ssh "${VPS}" '
 #    just the generic system prompt.
 CONTEXT_LOCAL="${HOME}/backup/obsidian-context.md"
 if [[ -f "${CONTEXT_LOCAL}" ]]; then
-  echo "==> uploading workspace-context to /etc/mwmai/obsidian-context.md"
+  echo "==> uploading workspace-context to /etc/oso-sync/obsidian-context.md"
   scp -q "${CONTEXT_LOCAL}" "${VPS}:/tmp/obsidian-context.md"
   ssh "${VPS}" '
-    sudo mkdir -p /etc/mwmai
-    sudo mv /tmp/obsidian-context.md /etc/mwmai/obsidian-context.md
-    sudo chown root:root /etc/mwmai/obsidian-context.md
-    sudo chmod 0644 /etc/mwmai/obsidian-context.md
+    sudo mkdir -p /etc/oso-sync
+    sudo mv /tmp/obsidian-context.md /etc/oso-sync/obsidian-context.md
+    sudo chown root:root /etc/oso-sync/obsidian-context.md
+    sudo chmod 0644 /etc/oso-sync/obsidian-context.md
   '
 else
   echo "==> skipping context upload (no ${CONTEXT_LOCAL})"

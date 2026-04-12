@@ -1,6 +1,6 @@
 # Workspace context — example template
 
-Copy this file to `/etc/mwmai/obsidian-context.md` on the VPS and fill in
+Copy this file to `/etc/oso-sync/obsidian-context.md` on the VPS and fill in
 with concise, model-facing facts about *your* workspace. The responder
 loads it once per invocation and prepends it to every Groq/Ollama prompt,
 so the model answers notes questions with project-aware grounding instead
@@ -53,7 +53,7 @@ LIVE / WIP / PAUSED / PLANNED. Do not list archived projects.)
 
 - Backups run at 01:00 UTC nightly to /mnt/backup
 - The main dev machine is Pop!_OS 24.04
-- Secrets live in /etc/mwmai/*.env (mode 0600)
+- Secrets live in /etc/oso-sync/*.env (mode 0600)
 - Syncthing mesh: workstation ↔ VPS ↔ phone
 
 ## How to answer

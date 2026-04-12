@@ -10,7 +10,7 @@ not re-processed, and Syncthing fans the updated file out to every paired
 device automatically.
 
 Context injection (2026-04-13):
-  - CONTEXT_FILE (default /etc/mwmai/obsidian-context.md): static workspace
+  - CONTEXT_FILE (default /etc/oso-sync/obsidian-context.md): static workspace
     brief loaded once at startup and prepended to the system prompt so the
     model knows the user's projects, stack, conventions, and identity.
   - CONTEXT_DIR (default ~/sync/notes): scanned per-question with a cheap
@@ -65,7 +65,7 @@ BASE_SYSTEM_PROMPT = os.environ.get(
 )
 
 CONTEXT_FILE = Path(
-    os.environ.get("CONTEXT_FILE", "/etc/mwmai/obsidian-context.md")
+    os.environ.get("CONTEXT_FILE", "/etc/oso-sync/obsidian-context.md")
 )
 CONTEXT_DIR = Path(
     os.environ.get("CONTEXT_DIR", str(Path.home() / "sync" / "notes"))
