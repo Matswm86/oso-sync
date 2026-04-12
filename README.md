@@ -2,34 +2,38 @@
 
 **O**bsidian · **S**yncthing · **O**llama — a three-piece, zero-cloud, always-on personal AI notes stack.
 
-Write a question into `notes/ask/foo.md` on your phone from anywhere. A minute later the answer is appended in-place, the file is fanned out to every device you own, and you've spent approximately zero cents. No vendor lock-in, no custom apps, no subscription — just three open-source tools wired together, with Groq as the fast primary LLM and self-hosted Ollama as the always-there fallback.
+Write a question into `notes/ask/foo.md` on your phone, laptop, or desktop. A minute later the answer is appended in-place, the file is fanned out to every device you own, and you've spent approximately zero cents. No vendor lock-in, no custom apps, no subscription — just three open-source tools wired together, with Groq as the fast primary LLM and self-hosted Ollama as the always-there fallback.
+
+**You don't need a VPS.** The responder is a stdlib-only Python script; it runs on whatever "always-on device" you pick — a cheap VPS, a home server, a Raspberry Pi, or just your workstation. See [Deployment modes](#deployment-modes) below for three topologies, from single-laptop local-only up to multi-device cloud mesh.
 
 ## What it does
 
 ```
-┌───────────┐     notes/ask/foo.md   ┌───────────┐     notes/ask/foo.md   ┌─────────────┐
-│   PHONE   │ ───────────────────▶  │    VPS    │ ◀─────────────────────│ WORKSTATION │
-│ (Obsidian │     (Syncthing BEP)    │           │     (Syncthing BEP)    │  (Obsidian) │
-│  + Sync)  │                        │           │                        │   + Sync)   │
-└───────────┘                        │  ollama   │                        └─────────────┘
-      ▲                              │  llama3.1 │                                ▲
-      │                              │     +     │                                │
-      │                              │ responder │                                │
-      │                              │  (60s tick)                                │
-      │                              │     │     │                                │
-      │                              │     ▼     │                                │
-      │   answer appended in-place   │  rewrites │   answer appended in-place     │
-      └──────────────────────────────│  the file │────────────────────────────────┘
-          (Syncthing BEP)            └───────────┘        (Syncthing BEP)
+┌───────────┐     notes/ask/foo.md   ┌─────────────┐     notes/ask/foo.md   ┌─────────────┐
+│   PHONE   │ ───────────────────▶  │  ALWAYS-ON  │ ◀─────────────────────│ WORKSTATION │
+│ (Obsidian │     (Syncthing BEP)    │    HOST     │     (Syncthing BEP)    │  (Obsidian) │
+│  + Sync)  │                        │ (VPS/Pi/PC) │                        │   + Sync)   │
+└───────────┘                        │   ollama    │                        └─────────────┘
+      ▲                              │  llama3.1   │                                ▲
+      │                              │      +      │                                │
+      │                              │  responder  │                                │
+      │                              │  (60s tick) │                                │
+      │                              │      │      │                                │
+      │                              │      ▼      │                                │
+      │   answer appended in-place   │   rewrites  │   answer appended in-place     │
+      └──────────────────────────────│   the file  │────────────────────────────────┘
+          (Syncthing BEP)            └─────────────┘        (Syncthing BEP)
 ```
 
-1. You write a question anywhere (phone, workstation, tablet)
-2. Syncthing propagates it to the VPS over BEP
-3. A systemd timer on the VPS fires every 60s and runs the responder
+1. You write a question on any paired device (phone, workstation, tablet, second laptop…)
+2. Syncthing propagates it to the always-on host over BEP
+3. A systemd timer on that host fires every 60s and runs the responder
 4. Responder queries Groq (primary) with Ollama as the fallback, and appends the answer
 5. Syncthing propagates the updated file back to every device
 
 Total latency: ~2–60 seconds depending on where you are in the polling cycle.
+
+If you run **local-only** (one laptop, no other devices), steps 2 and 5 collapse into a local filesystem write — no Syncthing needed. The responder just polls a directory on the same machine.
 
 ## The three tools
 
@@ -42,6 +46,45 @@ The name **OsO** comes from **O**bsidian · **s**yncthing · **O**llama — two 
 The responder uses **Groq `llama-3.3-70b-versatile` as the primary** LLM — hosted, fast (~500 tok/s), and free for personal-scale use. Ollama only engages if Groq fails or the key is unset. This was a deliberate flip from an early "Ollama-primary" design once it was clear that on an always-online VPS with an existing Groq free tier, Groq-primary dominates on every axis (speed, quality, CPU headroom) while Ollama remains invaluable as disaster-recovery insurance.
 
 The clever bit: none of these three tools know about each other. They're glued together by a ~200-line Python script (`responder/responder.py`) that polls the synced folder and writes answers back. The glue has no dependencies outside the Python stdlib.
+
+## Deployment modes
+
+Pick whichever matches the hardware you already own. The responder code is identical in all three — only the install target changes.
+
+### 1. Local-only (one machine, no sync needed)
+
+Simplest mode. The responder runs on your laptop/desktop and watches a local folder. Good for: getting started, single-device use, fully air-gapped setups.
+
+- ✅ Zero network dependencies — works on a plane
+- ✅ No Syncthing, no SSH, no VPS
+- ✅ Ollama-only mode works offline too (leave `GROQ_API_KEY` unset)
+- ❌ Question only answered when the machine is awake
+- ❌ No phone access
+
+Install: `systemctl --user enable --now oso-responder.timer` after pointing `NOTES_ASK_DIR` at any local folder you like (e.g. `~/vault/ask/`).
+
+### 2. Two-device (workstation ↔ phone, no VPS)
+
+Your workstation is the always-on host AND one of the edit surfaces. The phone pairs directly with the workstation via Syncthing. Good for: users whose workstation is usually on, who don't want to rent a VPS.
+
+- ✅ No rental cost at all
+- ✅ Bigger local models possible (workstation has real RAM/GPU)
+- ❌ Questions written on the phone only get answered when the workstation is on and on the same network (or reachable over a relay / VPN)
+- ❌ Workstation needs to stay paired with the phone even when you're travelling
+
+Install: same as Local-only, plus the Syncthing pairing from [Step 2](#2-workstation-side--pair-with-host-share-the-notes-folder) below — but pair phone ↔ workstation instead of phone ↔ VPS.
+
+### 3. Multi-device mesh with a dedicated always-on host (the quickstart below)
+
+A small VPS, a home server, or a Raspberry Pi sits between your devices and runs the responder 24/7. Good for: multiple edit devices, reliable mobile answers, already-owned always-on hardware.
+
+- ✅ Phone gets answers even when workstation is off
+- ✅ Multi-device mesh — add a second laptop, a tablet, etc. and they all just work
+- ✅ One Groq key, one responder, one log to check
+- ❌ ~€5–11/month if you rent a VPS (€0 if you already have one)
+- ❌ Initial pairing is 3 devices instead of 1 or 2
+
+The quickstart below walks through mode 3 because it's the richest; the other two are subsets. If you only want mode 1 or 2, skip the VPS SSH blocks and substitute "workstation" or "this machine" for "VPS" throughout.
 
 ## Project layout
 
@@ -68,19 +111,22 @@ oso-sync/
 
 ### Prerequisites
 
-- A Linux VPS you control (any small instance works — tested on a 16 GB Hetzner box, but anything with 2+ GB RAM and Ubuntu/Debian will do)
-- Workstation with Syncthing already installed
-- Phone with the [Syncthing-Fork Android app](https://f-droid.org/packages/com.github.catfriend1.syncthingandroid/)
-- Obsidian installed on phone + workstation (or any other markdown-vault app that uses plain files)
-- A free [Groq API key](https://console.groq.com/keys) (optional — without one, you'll run Ollama-only)
+- An **always-on Linux host** — a cheap VPS (€5–11/month), a home server, a Raspberry Pi 4/5, or your own workstation. Anything with 2+ GB RAM, Ubuntu/Debian, and systemd works. (For local-only mode, this is just your own machine — skip the VPS-specific steps.)
+- Syncthing on every device you want to write notes from (skip if local-only)
+- Phone with the [Syncthing-Fork Android app](https://f-droid.org/packages/com.github.catfriend1.syncthingandroid/) if you want phone access
+- Obsidian installed wherever you want to edit (or any other markdown-vault app that uses plain files)
+- A free [Groq API key](https://console.groq.com/keys) (optional — without one, you run Ollama-only)
 
-Throughout this README I use a shell variable for the VPS so you only have to fill it in once:
+Throughout this README I use a shell variable for the always-on host so you only fill it in once. For **VPS mode** this is an SSH target; for **local mode** leave it empty and skip every `ssh $VPS …` block (just run the inner command directly).
 
 ```bash
-VPS=youruser@vps.example.com       # replace with your actual SSH target
+VPS=youruser@vps.example.com       # VPS mode: your SSH target
+# VPS=                             # Local mode: leave empty, skip ssh $VPS blocks
 ```
 
-### 1. VPS side — install Ollama, Syncthing, model
+### 1. Host side — install Ollama, Syncthing, model
+
+(Run on the VPS via `ssh $VPS …`, or on your workstation directly for local-only mode.)
 
 ```bash
 ssh $VPS 'bash -s' <<'EOF'
@@ -96,7 +142,9 @@ EOF
 
 Copy the device ID that prints at the bottom — you'll need it in step 2.
 
-### 2. Workstation side — pair with VPS, share the notes folder
+### 2. Workstation side — pair with host, share the notes folder
+
+**Skip this section** in local-only mode — your workstation IS the host. Jump to step 4.
 
 ```bash
 VPS_DEVICE_ID=...paste-from-step-1...
@@ -135,7 +183,9 @@ ssh $VPS "syncthing cli config folders obsidian-vault devices add \
 
 Within ~10 seconds the two devices will find each other over IPv6 or the Syncthing global discovery service, and your notes will start flowing to the VPS.
 
-### 4. VPS side — deploy the responder
+### 4. Host side — deploy the responder
+
+(In local mode, run these commands directly on your workstation without the `ssh $VPS …` wrapper.)
 
 Create the secrets file first (mode 0600, never committed anywhere). The location `/etc/oso-sync/` is just a convention — you can put it anywhere as long as the systemd unit's `EnvironmentFile=` matches.
 
@@ -164,9 +214,9 @@ From the workstation, run the deploy script:
 
 This rsyncs `responder/` to `~/services/responder/` on the VPS, installs the systemd units under `~/.config/systemd/user/`, enables the 60s timer, and runs a smoke-test.
 
-### 5. Phone — pair with VPS manually
+### 5. Phone — pair with host manually (optional)
 
-See [`docs/phone-pairing.md`](docs/phone-pairing.md). It's five screens of tapping in the Syncthing-Fork app, one `syncthing cli` command on the VPS to accept the pending device, and — if you're on a Samsung or other aggressive-battery Android — an important list of OS-level settings you have to change or the daemon will get killed in the background. The doc has the full gotcha list.
+Skip if you're not using a phone. See [`docs/phone-pairing.md`](docs/phone-pairing.md). It's five screens of tapping in the Syncthing-Fork app, one `syncthing cli` command on the host to accept the pending device, and — if you're on a Samsung or other aggressive-battery Android — an important list of OS-level settings you have to change or the daemon will get killed in the background. The doc has the full gotcha list. The steps are identical whether the host is a VPS or your workstation.
 
 ### 6. Try it
 
@@ -190,7 +240,7 @@ The Beta-Binomial model...
 <!-- responder-processed -->
 ```
 
-The `🤖` tag records which backend actually answered. `groq` means primary path. `ollama` means Groq failed and the fallback took over — check `journalctl --user -u oso-responder.service -n 50` on the VPS for the reason.
+The `🤖` tag records which backend actually answered. `groq` means primary path. `ollama` means Groq failed and the fallback took over — check `journalctl --user -u oso-responder.service -n 50` on the host (via SSH or directly) for the reason.
 
 ## Configuration
 
@@ -217,33 +267,32 @@ ssh $VPS 'syncthing cli show connections | python3 -m json.tool'
 
 ## Cost
 
-Typical monthly cost for a dedicated VPS running only OsO Sync:
+| Component | Local-only | Dedicated VPS | Shared VPS / home server |
+|---|---|---|---|
+| Host hardware | **€0** (your own machine) | ~€5–11/month | **€0** (already owned) |
+| Bandwidth | €0 | €0 (included at this scale) | €0 |
+| Syncthing | €0 | €0 | €0 |
+| Ollama + `llama3.1:8b` | €0 (CPU) | €0 (CPU) | €0 (CPU) |
+| Groq primary | ~€0 (free tier, 30 req/min) | ~€0 | ~€0 |
+| Obsidian | €0 | €0 | €0 |
+| **Total** | **€0/month** | **~€5–11/month** | **€0/month** |
 
-| Component | Monthly | Notes |
-|---|---|---|
-| VPS (small instance, 2–16 GB RAM) | ~€5–11 | any provider; Hetzner, Scaleway, DO all work |
-| Bandwidth | €0 | included on most providers at this scale |
-| Syncthing | €0 | open source, runs peer-to-peer |
-| Ollama + `llama3.1:8b` | €0 | self-hosted, CPU inference |
-| Groq primary | ~€0 | free tier (30 req/min) easily covers personal use |
-| Obsidian | €0 | free for personal use |
-
-If your VPS is already running other things (reverse proxy, blog, small apps) the marginal cost of OsO Sync is effectively zero — it shares a box that exists.
+Local-only mode is the cheapest; a Pi 4/5 or reused old laptop as the always-on host is nearly free. Dedicated VPS only makes sense if you want rock-solid phone access while travelling and don't want to leave your own hardware running 24/7.
 
 ## Security posture
 
 - **End-to-end encrypted file sync** — Syncthing BEP uses mutual-authenticated TLS per device ID. A device can only join the mesh if you explicitly add its device ID on both sides.
 - **Minimal public attack surface** — only Syncthing BEP port 22000/tcp is exposed to the internet. The Syncthing web GUI (8384) is bound to `127.0.0.1` only.
-- **Secrets never in git** — the `.gitignore` excludes `.env*` and `secrets/`. Provision secrets via `/etc/oso-sync/obsidian.env` on the VPS (mode 0600, owned by your user).
+- **Secrets never in git** — the `.gitignore` excludes `.env*` and `secrets/`. Provision secrets via `/etc/oso-sync/obsidian.env` on the host (mode 0600, owned by your user).
 - **Responder runs unprivileged** as a systemd user service with `NoNewPrivileges=true` and `PrivateTmp=true`. The more aggressive hardening directives (`MemoryDenyWriteExecute`, `ProtectKernelTunables`, etc.) fail in user scope because systemd can't manipulate capabilities without root, so they're deliberately omitted — user scope already gives you per-uid isolation.
-- **Ollama bound to 127.0.0.1** on the VPS — not exposed to the internet.
-- **Groq key scoped per workload** — if you run multiple services off the same VPS (e.g. an Obsidian responder + a public chat endpoint), give each its own env file and key so a compromise blast-radius is one service, not all of them.
+- **Ollama bound to 127.0.0.1** on the host — not exposed to the internet.
+- **Groq key scoped per workload** — if you run multiple services off the same host (e.g. an Obsidian responder + a public chat endpoint), give each its own env file and key so a compromise blast-radius is one service, not all of them.
 
 ## Status
 
-- [x] VPS-side Syncthing + Ollama + responder deploy validated end-to-end
-- [x] Workstation ↔ VPS pair over IPv6, bidirectional folder sync
-- [x] Phone ↔ VPS pair over cellular (via Syncthing public relay pool, see `docs/phone-pairing.md`)
+- [x] Host-side Syncthing + Ollama + responder deploy validated end-to-end
+- [x] Workstation ↔ host pair over IPv6, bidirectional folder sync
+- [x] Phone ↔ host pair over cellular (via Syncthing public relay pool, see `docs/phone-pairing.md`)
 - [x] Groq primary + Ollama fallback (Cloudflare UA workaround baked in to `responder/query_groq()`)
 - [x] Responder sentinel deduplication (new + legacy markers) so historic files from earlier versions aren't double-answered
 - [ ] Optional: per-folder system prompts (e.g. `notes/ask-code/` uses a coder prompt, `notes/ask-writing/` a writing-coach prompt) — extension point, not built yet
