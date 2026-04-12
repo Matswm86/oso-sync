@@ -59,7 +59,27 @@ ssh "${VPS}" '
   systemctl --user status oso-responder.timer --no-pager | head -10
 '
 
-# 4. Smoke test: force one service run and tail the log
+# 4. Optional: upload workspace-context brief used by the responder to
+#    ground Groq answers in the user's real projects. The file is expected
+#    at ~/backup/obsidian-context.md locally (never in git — contains
+#    personal/internal detail). If missing, the responder still runs with
+#    just the generic system prompt.
+CONTEXT_LOCAL="${HOME}/backup/obsidian-context.md"
+if [[ -f "${CONTEXT_LOCAL}" ]]; then
+  echo "==> uploading workspace-context to /etc/mwmai/obsidian-context.md"
+  scp -q "${CONTEXT_LOCAL}" "${VPS}:/tmp/obsidian-context.md"
+  ssh "${VPS}" '
+    sudo mkdir -p /etc/mwmai
+    sudo mv /tmp/obsidian-context.md /etc/mwmai/obsidian-context.md
+    sudo chown root:root /etc/mwmai/obsidian-context.md
+    sudo chmod 0644 /etc/mwmai/obsidian-context.md
+  '
+else
+  echo "==> skipping context upload (no ${CONTEXT_LOCAL})"
+  echo "    see deploy/obsidian-context.md.example for the template"
+fi
+
+# 5. Smoke test: force one service run and tail the log
 echo "==> smoke test (one-shot service run)"
 ssh "${VPS}" 'systemctl --user start oso-responder.service; sleep 2; journalctl --user -u oso-responder.service -n 20 --no-pager'
 

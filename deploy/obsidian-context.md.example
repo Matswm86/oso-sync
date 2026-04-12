@@ -1,0 +1,67 @@
+# Workspace context — example template
+
+Copy this file to `/etc/mwmai/obsidian-context.md` on the VPS and fill in
+with concise, model-facing facts about *your* workspace. The responder
+loads it once per invocation and prepends it to every Groq/Ollama prompt,
+so the model answers notes questions with project-aware grounding instead
+of generic advice.
+
+Keep it **under ~3 KB**. Short bullet lists beat paragraphs. Treat this
+file as something the model reads — not as documentation for humans.
+
+**This file is not in git.** Write the real one directly on the VPS with
+mode 0644 and include personal/private details. The repo only ships this
+template so others know the shape.
+
+---
+
+## Identity
+
+- Name, role, location (short — e.g. "Alex, indie dev, Berlin")
+- Time zone (so the model answers with correct dates/times)
+
+## Active projects
+
+- `project-a` — one-line purpose, live URL, current status
+- `project-b` — ...
+- `project-c` — ...
+
+(List every project the model should recognize by name. Include state:
+LIVE / WIP / PAUSED / PLANNED. Do not list archived projects.)
+
+## Tech stack
+
+- Languages: Python 3.11, Go 1.22, ...
+- Frameworks: FastAPI, ...
+- Infra: Docker Compose, VPS X at Y, ...
+- Data: Postgres 16, Redis, ...
+- LLMs: Groq (free tier) primary, Ollama llama3.1:8b fallback
+
+## Coding conventions
+
+- Python: f-strings, Pathlib, specific exceptions, type hints required on public APIs
+- JS/TS: ...
+- Never commit: .env files, credentials, cloud keys
+- Git: conventional commits, squash-merge PRs
+
+## Repositories
+
+- `github.com/<user>/<repo-a>` — public
+- `github.com/<user>/<repo-b>` — private
+
+## Operational facts the model should know
+
+- Backups run at 01:00 UTC nightly to /mnt/backup
+- The main dev machine is Pop!_OS 24.04
+- Secrets live in /etc/mwmai/*.env (mode 0600)
+- Syncthing mesh: workstation ↔ VPS ↔ phone
+
+## How to answer
+
+- When the user asks about "the X project", they mean the one from the
+  "Active projects" list above — do not invent new project names.
+- Default to markdown lists. No emojis unless asked.
+- If a question references a file path, assume paths are on the
+  workstation (Linux, home at /home/<user>/) unless explicitly VPS.
+- For code snippets: complete, runnable, stdlib-first.
+- When unsure: say so briefly, ask one clarifying question, stop.
