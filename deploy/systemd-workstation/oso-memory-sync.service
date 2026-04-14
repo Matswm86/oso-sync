@@ -1,0 +1,9 @@
+[Unit]
+Description=OsO Sync — push MWM memory to VPS responder context
+Documentation=https://github.com/Matswm86/oso-sync
+
+[Service]
+Type=oneshot
+ExecStart=/home/mats/MWM-AI/projects/oso-sync/deploy/sync-memory-to-vps.sh
+TimeoutStartSec=300
+Nice=19

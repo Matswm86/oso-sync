@@ -253,8 +253,29 @@ The responder reads all config from environment variables loaded via the systemd
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | primary model |
 | `OLLAMA_URL` | `http://127.0.0.1:11434/api/generate` | fallback Ollama endpoint |
 | `OLLAMA_MODEL` | `llama3.1:8b` | fallback model |
+| `CONTEXT_FILE` | `/etc/oso-sync/obsidian-context.md` | static workspace brief prepended to every prompt |
+| `CONTEXT_DIRS` | *(falls back to `CONTEXT_DIR`)* | colon-separated dirs for keyword-RAG (earlier = higher priority) |
+| `CONTEXT_DIR` | `~/sync/notes` | legacy single-dir RAG path |
 
 Leave `GROQ_API_KEY` unset to run 100% local-only. The responder will silently skip files if both backends fail — they'll retry on the next poll cycle.
+
+### Grounding the model in your own context
+
+The default system prompt is generic. To make answers actually useful, populate two things:
+
+1. **`CONTEXT_FILE`** — a short workspace brief (identity, projects, conventions) that is prepended to every prompt. `install-vps.sh` uploads `~/backup/obsidian-context.md` to `/etc/oso-sync/obsidian-context.md` automatically. See `deploy/obsidian-context.md.example`.
+2. **`CONTEXT_DIRS`** — any number of markdown dirs scanned per-question with keyword-overlap scoring. Put the richest / smallest dirs first; later dirs are only searched if the `RAG_MAX_FILES` budget is still open.
+
+If you keep a notes/memory repo outside the synced folder, push it to the VPS on a timer. The `deploy/sync-memory-to-vps.sh` script + `deploy/systemd-workstation/oso-memory-sync.{service,timer}` units in this repo do exactly that (every 48h). Install on the workstation:
+
+```bash
+ln -sf "$PWD/deploy/systemd-workstation/oso-memory-sync.service" ~/.config/systemd/user/
+ln -sf "$PWD/deploy/systemd-workstation/oso-memory-sync.timer"   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now oso-memory-sync.timer
+```
+
+Then point `CONTEXT_DIRS` at the remote path on the VPS (e.g. `CONTEXT_DIRS=/home/you/services/responder-context/memory:/home/you/sync/notes`).
 
 ## Observability
 

@@ -56,20 +56,41 @@ GROQ_REASONING_MODEL = os.environ.get(
 
 BASE_SYSTEM_PROMPT = os.environ.get(
     "SYSTEM_PROMPT",
-    "You are a concise assistant embedded in the user's Obsidian notes "
-    "vault. Keep responses short and actionable. Use markdown formatting. "
-    "Answers sync back automatically via Syncthing. Prefer crisp lists "
-    "over paragraphs. When workspace context is provided, ground answers "
-    "in it; if a question is outside that context, say so briefly rather "
-    "than guessing.",
+    "You are an assistant embedded in the user's Obsidian vault. If a "
+    "workspace-context section is provided below, treat it as "
+    "authoritative — the projects and assets listed there are things the "
+    "user ALREADY OWNS.\n\n"
+    "When the user brainstorms, asks for suggestions, or poses an open-"
+    "ended problem, cross-reference the listed projects and call out "
+    "concrete parallels by name. Never recommend a capability the user "
+    "already owns without naming the owned asset and explaining the fit. "
+    "If nothing in the workspace applies, say so briefly and stop — do "
+    "NOT fall back to generic advice.\n\n"
+    "Voice: direct, concrete, no preamble, no pleasantries, no closing "
+    "summary. Match the user's terseness.\n\n"
+    "Format rules:\n"
+    "- Brainstorms / tradeoffs / 'what should we do?' → prose "
+    "paragraphs, not bullet soup. Bullets only for genuine enumerations "
+    "(ranked options, step lists, checklists).\n"
+    "- Status / lookup / checklist questions → terse markdown lists ok.\n"
+    "- No emojis unless the question contains them.\n"
+    "- Absolute dates only (YYYY-MM-DD).\n\n"
+    "Any additional hard rules from the workspace context override this "
+    "prompt. Your answer is appended to the note and syncs back "
+    "automatically. Be useful or be brief.",
 )
 
 CONTEXT_FILE = Path(
     os.environ.get("CONTEXT_FILE", "/etc/oso-sync/obsidian-context.md")
 )
-CONTEXT_DIR = Path(
-    os.environ.get("CONTEXT_DIR", str(Path.home() / "sync" / "notes"))
-)
+_CONTEXT_DIRS_RAW = os.environ.get("CONTEXT_DIRS", "").strip()
+if _CONTEXT_DIRS_RAW:
+    CONTEXT_DIRS = [Path(p).expanduser() for p in _CONTEXT_DIRS_RAW.split(":") if p]
+else:
+    CONTEXT_DIRS = [
+        Path(os.environ.get("CONTEXT_DIR", str(Path.home() / "sync" / "notes")))
+    ]
+CONTEXT_DIR = CONTEXT_DIRS[0]  # legacy alias for tests/inspection
 RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
 RAG_SNIPPET_CHARS = int(os.environ.get("RAG_SNIPPET_CHARS", "600"))
 RAG_MAX_FILES = int(os.environ.get("RAG_MAX_FILES", "400"))
@@ -111,38 +132,40 @@ def _tokenize(text: str) -> set[str]:
 
 
 def _rag_snippets(question: str, self_path: Path | None) -> str:
-    """Keyword-score markdown files in CONTEXT_DIR, return top-K excerpts."""
-    if not CONTEXT_DIR.is_dir():
-        return ""
+    """Keyword-score markdown files across CONTEXT_DIRS, return top-K excerpts."""
     q_tokens = _tokenize(question)
     if not q_tokens:
         return ""
-    scored: list[tuple[int, Path, str]] = []
+    scored: list[tuple[int, Path, Path, str]] = []
     count = 0
-    for fp in CONTEXT_DIR.rglob("*.md"):
+    for root in CONTEXT_DIRS:
+        if not root.is_dir():
+            continue
+        for fp in root.rglob("*.md"):
+            if count >= RAG_MAX_FILES:
+                break
+            count += 1
+            if self_path is not None and fp.resolve() == self_path.resolve():
+                continue
+            try:
+                body = fp.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if SENTINEL in body or any(s in body for s in LEGACY_SENTINELS):
+                # Skip already-answered Q&A files; they'd echo prior answers
+                # into every follow-up and poison the retrieval.
+                continue
+            doc_tokens = _tokenize(body)
+            score = len(q_tokens & doc_tokens)
+            if score >= 2:
+                scored.append((score, root, fp, body))
         if count >= RAG_MAX_FILES:
             break
-        count += 1
-        if self_path is not None and fp.resolve() == self_path.resolve():
-            continue
-        try:
-            body = fp.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        if SENTINEL in body or any(s in body for s in LEGACY_SENTINELS):
-            # Skip already-answered Q&A files; they'd echo prior answers
-            # into every follow-up and poison the retrieval.
-            continue
-        doc_tokens = _tokenize(body)
-        score = len(q_tokens & doc_tokens)
-        if score >= 2:
-            scored.append((score, fp, body))
     if not scored:
         return ""
     scored.sort(key=lambda t: t[0], reverse=True)
     blocks: list[str] = []
-    for score, fp, body in scored[:RAG_TOP_K]:
-        # Find the first chunk that contains the most query tokens
+    for score, root, fp, body in scored[:RAG_TOP_K]:
         best_start, best_hits = 0, 0
         step = max(RAG_SNIPPET_CHARS // 2, 100)
         for start in range(0, len(body), step):
@@ -156,7 +179,7 @@ def _rag_snippets(question: str, self_path: Path | None) -> str:
         excerpt = body[best_start : best_start + RAG_SNIPPET_CHARS].strip()
         rel = fp.name
         try:
-            rel = str(fp.relative_to(CONTEXT_DIR))
+            rel = str(fp.relative_to(root))
         except ValueError:
             pass
         blocks.append(f"### {rel} (score={score})\n\n{excerpt}")

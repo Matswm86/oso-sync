@@ -1,0 +1,10 @@
+[Unit]
+Description=OsO Sync memory-to-VPS timer (every 48h)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=48h
+Unit=oso-memory-sync.service
+
+[Install]
+WantedBy=timers.target
