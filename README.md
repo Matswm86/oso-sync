@@ -316,7 +316,8 @@ Local-only mode is the cheapest; a Pi 4/5 or reused old laptop as the always-on 
 - [x] Phone ↔ host pair over cellular (via Syncthing public relay pool, see `docs/phone-pairing.md`)
 - [x] Groq primary + Ollama fallback (Cloudflare UA workaround baked in to `responder/query_groq()`)
 - [x] Responder sentinel deduplication (new + legacy markers) so historic files from earlier versions aren't double-answered
-- [ ] Optional: per-folder system prompts (e.g. `notes/ask-code/` uses a coder prompt, `notes/ask-writing/` a writing-coach prompt) — extension point, not built yet
+- [x] Context grounding v2 (2026-04-14) — responder names projects (Belliq, TrakTek) correctly from workspace memory; memory rsync to VPS every 48h via `oso-memory-sync.timer`
+- [ ] Optional: per-folder system prompts (e.g. `notes/ask-code/` uses a coder prompt, `notes/ask-writing/` a writing-coach prompt), extension point, not built yet
 
 ## Known limitations
 
