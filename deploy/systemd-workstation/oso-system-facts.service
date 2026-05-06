@@ -1,0 +1,9 @@
+[Unit]
+Description=OsO Sync — refresh workstation system-facts.md for the responder
+Documentation=https://github.com/Matswm86/oso-sync
+
+[Service]
+Type=oneshot
+ExecStart=/home/mats/MWM-AI/projects/oso-sync/deploy/generate-system-facts.sh
+TimeoutStartSec=120
+Nice=19

@@ -1,0 +1,11 @@
+[Unit]
+Description=OsO Sync system-facts refresh timer (weekly)
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=7d
+Persistent=true
+Unit=oso-system-facts.service
+
+[Install]
+WantedBy=timers.target
