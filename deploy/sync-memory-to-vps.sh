@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sync-memory-to-vps.sh — push ~/MWM-AI/memory/ to the VPS responder context.
+# sync-memory-to-vps.sh — push ~/MWM/memory/ to the VPS responder context.
 #
 # The VPS responder (services/responder/responder.py) reads CONTEXT_DIRS which
 # points at ~/services/responder-context/memory/ on the VPS. This script keeps
