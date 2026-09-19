@@ -13,7 +13,7 @@
 set -euo pipefail
 
 VPS="${VPS:-mats@204.168.244.173}"
-SRC="${MEMORY_SRC:-${HOME}/MWM-AI/memory}"
+SRC="${MEMORY_SRC:-${HOME}/MWM/memory}"
 DEST="${MEMORY_DEST:-services/responder-context/memory}"
 
 if [[ ! -d "${SRC}" ]]; then
