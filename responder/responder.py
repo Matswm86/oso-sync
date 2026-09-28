@@ -2,7 +2,7 @@
 """OsO Sync responder — Groq primary, local Ollama fallback.
 
 Watches the Syncthing-synced notes/ask/ dir for question files. For each
-unprocessed .md it POSTs the content to Groq (llama-3.3-70b-versatile by
+unprocessed .md it POSTs the content to Groq (qwen/qwen3.8-27b by
 default) which returns in 1-2s at ~500 tok/s. On Groq failure (rate limit,
 network, provider down) it falls back to local Ollama on 127.0.0.1 (slower
 but self-hosted). The answer is appended in-place with a sentinel so it is
@@ -19,7 +19,7 @@ Context injection (2026-04-13):
 
 Why Groq-primary on an always-on VPS:
   - ~100x faster than CPU Ollama (1-2s vs 5-10s per request)
-  - 70B params vs 8B — much better at nuanced questions
+  - 27B/120B params vs 8B — much better at nuanced questions
   - Frees VPS CPU for the other vhosts sharing the box
   - Free tier (30 req/min) easily covers personal notes scale
 Ollama stays as disaster-recovery fallback: real outages, rate limits,
@@ -44,14 +44,14 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 
 # Model swap: GROQ_REASONING_MODEL activates for questions flagged as
 # reasoning-heavy by _looks_like_reasoning(). Free on Groq, slower but
 # much better at planning/comparison/analysis.
 GROQ_REASONING_MODEL = os.environ.get(
-    "GROQ_REASONING_MODEL", "deepseek-r1-distill-llama-70b"
+    "GROQ_REASONING_MODEL", "openai/gpt-oss-120b"
 )
 
 BASE_SYSTEM_PROMPT = os.environ.get(
@@ -102,11 +102,7 @@ SENTINEL = "<!-- responder-processed -->"
 LEGACY_SENTINELS = ("<!-- ollama-responded -->",)
 
 _STOPWORDS = frozenset(
-    "the a an and or of to in on for is are was were be been being with "
-    "this that these those it its as at by from into up out so do does did "
-    "not no if then when while i you he she we they me him her us them "
-    "what which who whose how why where there here my your our their his "
-    "can could would should may might will shall just also about over".split()
+    ["the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "were", "be", "been", "being", "with", "this", "that", "these", "those", "it", "its", "as", "at", "by", "from", "into", "up", "out", "so", "do", "does", "did", "not", "no", "if", "then", "when", "while", "i", "you", "he", "she", "we", "they", "me", "him", "her", "us", "them", "what", "which", "who", "whose", "how", "why", "where", "there", "here", "my", "your", "our", "their", "his", "can", "could", "would", "should", "may", "might", "will", "shall", "just", "also", "about", "over"]
 )
 
 
@@ -262,7 +258,7 @@ def query_groq(question: str, system_prompt: str, model: str) -> str | None:
         with urlopen(req, timeout=GROQ_TIMEOUT) as resp:
             result = json.loads(resp.read().decode("utf-8"))
             content = result["choices"][0]["message"]["content"].strip() or None
-            # deepseek-r1-distill emits <think>…</think> reasoning; strip it
+            # Reasoning models may emit <think>…</think> in content; strip it
             # so Obsidian doesn't get a wall of chain-of-thought noise.
             if content and "<think>" in content:
                 content = re.sub(
