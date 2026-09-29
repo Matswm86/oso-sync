@@ -37,6 +37,9 @@ INDEX_DIR = Path(
 CHUNK_CHARS = int(os.environ.get("RAG_CHUNK_CHARS", "1500"))
 MAX_CHUNKS_PER_FILE = int(os.environ.get("RAG_MAX_CHUNKS_PER_FILE", "10"))
 EMBED_BATCH = int(os.environ.get("RAG_EMBED_BATCH", "32"))
+# Model-specific text prefixes; the defaults are nomic-embed-text's.
+DOC_PREFIX = os.environ.get("EMBED_DOC_PREFIX", "search_document: ")
+QUERY_PREFIX = os.environ.get("EMBED_QUERY_PREFIX", "search_query: ").replace("\\n", "\n")
 # Colon-separated globs matched against each path relative to its context dir
 # and against every directory name in it.
 EXCLUDE = [
@@ -178,7 +181,7 @@ def build() -> int:
     t0 = time.time()
     for i in range(0, len(pending), EMBED_BATCH):
         batch = pending[i : i + EMBED_BATCH]
-        vecs = embed([f"search_document: {Path(c['path']).stem}\n{c['text']}" for c in batch])
+        vecs = embed([f"{DOC_PREFIX}{Path(c['path']).stem}\n{c['text']}" for c in batch])
         if vecs is None:
             log("stopping: embedding backend failed; index left unchanged")
             return 2
@@ -189,7 +192,7 @@ def build() -> int:
             log(f"embedded {done}/{len(pending)} in {time.time() - t0:.0f}s")
 
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    mat = _normalise(np.vstack(rows)) if rows else np.zeros((0, 768), dtype=np.float32)
+    mat = _normalise(np.vstack(rows)) if rows else np.zeros((0, 1), dtype=np.float32)
     tmp_vec, tmp_meta = INDEX_DIR / "vectors.tmp.npy", INDEX_DIR / "chunks.tmp.json"
     np.save(tmp_vec, mat)
     tmp_meta.write_text(
@@ -309,7 +312,7 @@ def search(
     meta, vecs = load_index()
     if meta is None or len(vecs) == 0:
         return None
-    q = embed([f"search_query: {question}"], timeout=30)
+    q = embed([f"{QUERY_PREFIX}{question}"], timeout=30)
     if q is None:
         return None
     qv = np.asarray(q[0], dtype=np.float32)
