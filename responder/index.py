@@ -167,7 +167,9 @@ def build() -> int:
         except OSError:
             continue
         files[key] = sig
-        if any(m in body for m in SKIP_MARKERS):
+        # Answered questions end with the responder's marker; notes that only
+        # mention the marker are indexed.
+        if body.rstrip().endswith(SKIP_MARKERS):
             continue
         for start, text in chunk_text(body):
             pending.append({"path": key, "start": start, "text": text})
@@ -201,10 +203,109 @@ def build() -> int:
     return 0
 
 
+_STOP = frozenset(
+    [
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "of",
+        "to",
+        "in",
+        "on",
+        "for",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "what",
+        "which",
+        "who",
+        "how",
+        "why",
+        "when",
+        "where",
+        "does",
+        "do",
+        "did",
+        "my",
+        "our",
+        "your",
+        "we",
+        "i",
+        "you",
+        "it",
+        "its",
+        "this",
+        "that",
+        "with",
+        "from",
+        "about",
+        "should",
+        "can",
+        "could",
+        "would",
+        "will",
+        "have",
+        "has",
+        "had",
+        "any",
+        "all",
+    ]
+)
+RRF_K = 60
+
+
+def _terms(text: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in _STOP and len(t) > 1]
+
+
+def _file_head(text: str) -> str:
+    """Frontmatter name/description and first heading of a file's first chunk."""
+    lines = [ln for ln in text.splitlines()[:15] if ln.startswith(("name:", "description:", "# "))]
+    return " ".join(lines)
+
+
+def _bm25(question: str, chunks: list[dict], k1: float = 1.5, b: float = 0.75):
+    """BM25 over chunk text plus file name, so names and IDs rank by exact match."""
+    q = set(_terms(question))
+    if not q:
+        return np.zeros(len(chunks), dtype=np.float32)
+    heads = {c["path"]: _file_head(c["text"]) for c in chunks if c["start"] == 0}
+    docs = [
+        _terms(f"{Path(c['path']).stem} {heads.get(c['path'], '')} {c['text']}") for c in chunks
+    ]
+    lens = np.array([len(d) for d in docs], dtype=np.float32)
+    avg = float(lens.mean()) or 1.0
+    df = {t: 0 for t in q}
+    tfs = []
+    for d in docs:
+        tf: dict[str, int] = {}
+        for t in d:
+            if t in q:
+                tf[t] = tf.get(t, 0) + 1
+        for t in tf:
+            df[t] += 1
+        tfs.append(tf)
+    n = len(docs)
+    idf = {t: np.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5)) for t in q}
+    scores = np.zeros(n, dtype=np.float32)
+    for i, tf in enumerate(tfs):
+        norm = k1 * (1 - b + b * lens[i] / avg)
+        scores[i] = sum(idf[t] * f * (k1 + 1) / (f + norm) for t, f in tf.items())
+    return scores
+
+
 def search(
-    question: str, top_k: int, per_file: int = 2, exclude_path: Path | None = None
+    question: str, top_k: int, per_file: int = 1, exclude_path: Path | None = None
 ) -> list[dict] | None:
-    """Return top chunks for question, or None when the index is unusable."""
+    """Top chunks by reciprocal-rank fusion of embedding and BM25 rankings.
+
+    Returns None when the index or the embedding backend is unusable.
+    """
     meta, vecs = load_index()
     if meta is None or len(vecs) == 0:
         return None
@@ -213,27 +314,26 @@ def search(
         return None
     qv = np.asarray(q[0], dtype=np.float32)
     qv /= np.linalg.norm(qv) or 1.0
-    scores = vecs @ qv
-    # Exact-term bonus so IDs and project names that embeddings blur still rank.
-    terms = {t for t in re.findall(r"[a-z0-9][a-z0-9_.-]{3,}", question.lower())}
-    order = np.argsort(-scores)[: top_k * 20]
-    ranked = []
-    for i in order:
-        c = meta["chunks"][int(i)]
-        text = c["text"].lower()
-        bonus = 0.02 * min(sum(1 for t in terms if t in text), 5)
-        ranked.append((float(scores[i]) + bonus, c))
-    ranked.sort(key=lambda t: t[0], reverse=True)
+    chunks = meta["chunks"]
+    fused = np.zeros(len(chunks), dtype=np.float64)
+    for scores in (vecs @ qv, _bm25(question, chunks)):
+        order = np.argsort(-scores)[:200]
+        for rank, i in enumerate(order):
+            if scores[i] > 0:
+                fused[i] += 1.0 / (RRF_K + rank)
     skip = str(exclude_path.resolve()) if exclude_path else None
     out: list[dict] = []
     seen: dict[str, int] = {}
-    for score, c in ranked:
+    for i in np.argsort(-fused):
+        if fused[i] <= 0:
+            break
+        c = chunks[int(i)]
         if skip and str(Path(c["path"]).resolve()) == skip:
             continue
         if seen.get(c["path"], 0) >= per_file:
             continue
         seen[c["path"]] = seen.get(c["path"], 0) + 1
-        out.append({**c, "score": round(score, 3)})
+        out.append({**c, "score": round(float(fused[i]) * 100, 2)})
         if len(out) >= top_k:
             break
     return out
