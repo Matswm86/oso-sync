@@ -43,9 +43,11 @@ The name **OsO** comes from **O**bsidian · **s**yncthing · **O**llama — two 
 - **Syncthing** — open-source, end-to-end-encrypted file sync over a P2P mesh. No central server required; the VPS is just "a device that's always on". Zero vendor dependency.
 - **Ollama** — local LLM runtime. On the VPS it runs `llama3.1:8b` on CPU as the fallback when Groq is rate-limited or down. On your workstation you can point at bigger local models; on your phone there is no Ollama — the VPS handles mobile.
 
-The responder uses **Groq `llama-3.3-70b-versatile` as the primary** LLM — hosted, fast (~500 tok/s), and free for personal-scale use. Ollama only engages if Groq fails or the key is unset. This was a deliberate flip from an early "Ollama-primary" design once it was clear that on an always-online VPS with an existing Groq free tier, Groq-primary dominates on every axis (speed, quality, CPU headroom) while Ollama remains invaluable as disaster-recovery insurance.
+The responder uses **Groq `qwen/qwen3.8-27b` as the primary** LLM: hosted, fast (~500 tok/s), and free for personal-scale use. Questions that look reasoning-heavy (they contain a trigger such as "why", "compare", "trade-off", "design" or "step by step", or run past 1200 characters) go to `openai/gpt-oss-120b` instead; if that call fails, the responder retries once on the primary model. Ollama only engages if Groq fails or the key is unset. This was a deliberate flip from an early "Ollama-primary" design once it was clear that on an always-online VPS with an existing Groq free tier, Groq-primary dominates on every axis (speed, quality, CPU headroom) while Ollama remains invaluable as disaster-recovery insurance.
 
-The clever bit: none of these three tools know about each other. They're glued together by a ~200-line Python script (`responder/responder.py`) that polls the synced folder and writes answers back. The glue has no dependencies outside the Python stdlib.
+Groq retires models from time to time (it retired `llama-3.3-70b-versatile` and `deepseek-r1-distill-llama-70b`, the earlier defaults here, which made every request fail with HTTP 404). If your `obsidian.env` still names a retired model, set `GROQ_MODEL` and `GROQ_REASONING_MODEL` to ones Groq currently serves.
+
+The clever bit: none of these three tools know about each other. They're glued together by a ~340-line Python script (`responder/responder.py`) that polls the synced folder and writes answers back. The glue has no dependencies outside the Python stdlib.
 
 ## Deployment modes
 
@@ -92,7 +94,7 @@ The quickstart below walks through mode 3 because it's the richest; the other tw
 oso-sync/
 ├── README.md                  this file
 ├── responder/
-│   ├── responder.py           the glue: polls notes/ask/, queries Groq/Ollama, appends answer
+│   ├── responder.py           the glue: polls notes/ask/, adds context, queries Groq/Ollama, appends answer
 │   └── .env.example           template for /etc/oso-sync/obsidian.env on the VPS
 ├── systemd/
 │   ├── oso-responder.service  systemd user unit for the responder (uses %h specifier)
@@ -104,7 +106,12 @@ oso-sync/
 │   └── phone-pairing.md       manual phone ↔ VPS pairing (Syncthing app steps)
 └── deploy/
     ├── install-vps.sh         one-shot deploy from the repo to your VPS
-    └── status.sh              whole-stack health check
+    ├── status.sh              whole-stack health check
+    ├── obsidian-context.md.example   template for the static workspace brief (CONTEXT_FILE)
+    ├── sync-memory-to-vps.sh  rsync a local folder of markdown notes to the host for CONTEXT_DIRS
+    ├── generate-system-facts.sh      weekly hardware/OS snapshot (markdown) for the responder's RAG
+    └── systemd-workstation/   workstation-side user units: oso-memory-sync.{service,timer} (48h),
+                               oso-system-facts.{service,timer} (weekly)
 ```
 
 ## Quick start
@@ -192,12 +199,13 @@ Create the secrets file first (mode 0600, never committed anywhere). The locatio
 ```bash
 ssh $VPS 'bash -s' <<EOF
 sudo mkdir -p /etc/oso-sync
-sudo tee /etc/oso-sync/obsidian.env >/dev/null <<'ENV'
+sudo tee /etc/oso-sync/obsidian.env >/dev/null <<ENV
 NOTES_ASK_DIR=\$HOME/sync/notes/ask
 OLLAMA_URL=http://127.0.0.1:11434/api/generate
 OLLAMA_MODEL=llama3.1:8b
 GROQ_API_KEY=gsk_paste_your_groq_key_here
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=qwen/qwen3.8-27b
+GROQ_REASONING_MODEL=openai/gpt-oss-120b
 ENV
 sudo chown \$USER:\$USER /etc/oso-sync/obsidian.env
 sudo chmod 600 /etc/oso-sync/obsidian.env
@@ -233,14 +241,14 @@ Explain Beta-Binomial thresholds in one paragraph
 
 ---
 
-**🤖 groq** · 2026-04-10 09:32
+**🤖 groq:qwen/qwen3.8-27b** · 2026-04-10 09:32
 
 The Beta-Binomial model...
 
 <!-- responder-processed -->
 ```
 
-The `🤖` tag records which backend actually answered. `groq` means primary path. `ollama` means Groq failed and the fallback took over — check `journalctl --user -u oso-responder.service -n 50` on the host (via SSH or directly) for the reason.
+The `🤖` tag records which backend and model actually answered. `groq:<model>` means the primary path (a reasoning-heavy question shows `groq:openai/gpt-oss-120b`). `ollama:<model>` means Groq failed and the fallback took over: check `journalctl --user -u oso-responder.service -n 50` on the host (via SSH or directly) for the reason.
 
 ## Configuration
 
@@ -250,14 +258,20 @@ The responder reads all config from environment variables loaded via the systemd
 |---|---|---|
 | `NOTES_ASK_DIR` | `~/sync/notes/ask` | where to poll for questions |
 | `GROQ_API_KEY` | *(unset)* | primary LLM; unset → local-only (Ollama-only) mode |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | primary model |
+| `GROQ_MODEL` | `qwen/qwen3.8-27b` | primary model |
+| `GROQ_REASONING_MODEL` | `openai/gpt-oss-120b` | model for questions that look reasoning-heavy |
 | `OLLAMA_URL` | `http://127.0.0.1:11434/api/generate` | fallback Ollama endpoint |
 | `OLLAMA_MODEL` | `llama3.1:8b` | fallback model |
+| `SYSTEM_PROMPT` | *(built-in prompt)* | replaces the base system prompt |
+| `MAX_TOKENS` | `2000` | max tokens per answer |
 | `CONTEXT_FILE` | `/etc/oso-sync/obsidian-context.md` | static workspace brief prepended to every prompt |
 | `CONTEXT_DIRS` | *(falls back to `CONTEXT_DIR`)* | colon-separated dirs for keyword-RAG (earlier = higher priority) |
 | `CONTEXT_DIR` | `~/sync/notes` | legacy single-dir RAG path |
+| `RAG_TOP_K` | `5` | note excerpts retrieved per question |
+| `RAG_SNIPPET_CHARS` | `600` | characters per retrieved excerpt |
+| `RAG_MAX_FILES` | `400` | max markdown files scanned per question |
 
-Leave `GROQ_API_KEY` unset to run 100% local-only. The responder will silently skip files if both backends fail — they'll retry on the next poll cycle.
+Leave `GROQ_API_KEY` unset to run 100% local-only. If both backends fail, the responder logs it and leaves the file unprocessed, and it retries on the next poll cycle. `NOTES_ASK_DIR` must be an absolute path (or unset): the responder does not expand `$HOME` in env values.
 
 ### Grounding the model in your own context
 
@@ -274,6 +288,8 @@ ln -sf "$PWD/deploy/systemd-workstation/oso-memory-sync.timer"   ~/.config/syste
 systemctl --user daemon-reload
 systemctl --user enable --now oso-memory-sync.timer
 ```
+
+Before the `enable` step above, edit `ExecStart=` in the shipped units so it points at `<install-dir>/deploy/…` (it is a fixed path from the author's machine), and give the sync script your own target and source: `VPS=user@host` and `MEMORY_SRC=<dir of markdown notes>` (optionally `MEMORY_DEST`), for example with `Environment=` lines in a drop-in for `oso-memory-sync.service`. The built-in defaults in `sync-memory-to-vps.sh` are the author's host and folder, not yours. `oso-system-facts.timer` works the same way: it runs `generate-system-facts.sh` weekly and writes a markdown snapshot of the workstation's CPU, RAM, GPU and OS to `$OUT`, so keep `$OUT` inside the folder the memory sync pushes.
 
 Then point `CONTEXT_DIRS` at the remote path on the VPS (e.g. `CONTEXT_DIRS=/home/you/services/responder-context/memory:/home/you/sync/notes`).
 
@@ -307,6 +323,7 @@ Local-only mode is the cheapest; a Pi 4/5 or reused old laptop as the always-on 
 - **Secrets never in git** — the `.gitignore` excludes `.env*` and `secrets/`. Provision secrets via `/etc/oso-sync/obsidian.env` on the host (mode 0600, owned by your user).
 - **Responder runs unprivileged** as a systemd user service with `NoNewPrivileges=true` and `PrivateTmp=true`. The more aggressive hardening directives (`MemoryDenyWriteExecute`, `ProtectKernelTunables`, etc.) fail in user scope because systemd can't manipulate capabilities without root, so they're deliberately omitted — user scope already gives you per-uid isolation.
 - **Ollama bound to 127.0.0.1** on the host — not exposed to the internet.
+- **What leaves your machine**: with `GROQ_API_KEY` set, each question plus the workspace brief and retrieved note excerpts attached to it is sent to `api.groq.com`. Leave the key unset and nothing is sent to a hosted LLM.
 - **Groq key scoped per workload** — if you run multiple services off the same host (e.g. an Obsidian responder + a public chat endpoint), give each its own env file and key so a compromise blast-radius is one service, not all of them.
 
 ## Status
@@ -317,6 +334,9 @@ Local-only mode is the cheapest; a Pi 4/5 or reused old laptop as the always-on 
 - [x] Groq primary + Ollama fallback (Cloudflare UA workaround baked in to `responder/query_groq()`)
 - [x] Responder sentinel deduplication (new + legacy markers) so historic files from earlier versions aren't double-answered
 - [x] Context grounding v2 (2026-04-14) — responder names projects (Belliq, TrakTek) correctly from workspace memory; memory rsync to VPS every 48h via `oso-memory-sync.timer`
+- [x] Reasoning-model routing: questions that look reasoning-heavy go to `openai/gpt-oss-120b`, with a retry on the primary model if it fails
+- [x] Weekly workstation system-facts snapshot (`oso-system-facts.timer`) so the responder can answer device and spec questions
+- [x] Groq defaults moved to `qwen/qwen3.8-27b` + `openai/gpt-oss-120b` (2026-09-28) after Groq retired `llama-3.3-70b-versatile`
 - [ ] Optional: per-folder system prompts (e.g. `notes/ask-code/` uses a coder prompt, `notes/ask-writing/` a writing-coach prompt), extension point, not built yet
 
 ## Known limitations

@@ -129,7 +129,7 @@ Within 60 seconds (one responder-timer cycle):
 
 1. Syncthing pushes it to the VPS
 2. VPS responder picks it up, queries Groq (primary) or Ollama (fallback)
-3. Answer is appended in-place below the question with a `🤖 groq` or `🤖 ollama` marker
+3. Answer is appended in-place below the question with a `🤖 groq:<model>` or `🤖 ollama:<model>` marker
 4. Syncthing pushes the updated file back to every paired device
 
 Check the responder log for the trace:
@@ -143,6 +143,6 @@ You should see lines like:
 ```
 found 1 file(s) in /home/<user>/sync/notes/ask
 processing test.md
-updated test.md via groq
+updated test.md via groq:qwen/qwen3.8-27b
 updated 1/1
 ```

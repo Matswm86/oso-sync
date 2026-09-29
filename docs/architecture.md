@@ -2,7 +2,7 @@
 
 ## The problem
 
-You want to capture thoughts and questions from anywhere (phone, workstation, any device), have them answered by an AI, and keep the conversation in your Obsidian vault — **without depending on home wifi, without depending on the workstation being on, and without sending your notes to a third-party cloud service.**
+You want to capture thoughts and questions from anywhere (phone, workstation, any device), have them answered by an AI, and keep the conversation in your Obsidian vault: **without depending on home wifi, without depending on the workstation being on, and without a hosted notes service.** Your vault syncs peer-to-peer; the only thing that leaves your devices is the question (plus the context snippets attached to it) when you set a Groq key. Leave the key unset and everything stays local.
 
 ## The stack
 
@@ -37,12 +37,12 @@ Three off-the-shelf pieces, wired together:
 2. Syncthing propagates the file to the VPS (~seconds over WiFi/LTE)
 3. VPS systemd user timer fires `oso-responder.service` every 60s
 4. Responder finds the new `.md` file in `$NOTES_ASK_DIR` (default `~/sync/notes/ask/`)
-5. Responder POSTs to Groq (`llama-3.3-70b-versatile`) — **primary**, using the key from the env file. Returns in ~1–2 seconds.
-6. On Groq failure (rate limit, outage, missing key), responder falls back to local Ollama (`llama3.1:8b`) at `127.0.0.1:11434`. ~5–10s on CPU.
-7. Response is appended to the original file with a sentinel marker (the `🤖` label records which backend actually answered):
+5. Responder builds the system prompt (built-in prompt, the `CONTEXT_FILE` brief, and the top `RAG_TOP_K` keyword-matched note excerpts from `CONTEXT_DIRS`) and POSTs to Groq (**primary**), using the key from the env file. The model is `qwen/qwen3.8-27b`, or `openai/gpt-oss-120b` when the question looks reasoning-heavy. Returns in ~1–2 seconds.
+6. On Groq failure (rate limit, outage, missing key), responder falls back to local Ollama (`llama3.1:8b`) at `127.0.0.1:11434`. ~5–10s on CPU. A failed reasoning-model call is first retried once on the primary Groq model before Ollama is tried.
+7. Response is appended to the original file with a sentinel marker (the `🤖` label records which backend and model actually answered):
    ```markdown
    ---
-   **🤖 groq** · 2026-04-10 09:28
+   **🤖 groq:qwen/qwen3.8-27b** · 2026-04-10 09:28
    
    <response>
    
@@ -68,8 +68,8 @@ If you need lower latency, swap the timer for a Syncthing `post-sync` hook (see 
 ## Why Groq primary + Ollama fallback?
 
 - **Groq** is the primary because on an always-online VPS it wins on every axis for a conversational-notes workload:
-  - **Speed**: `llama-3.3-70b-versatile` at ~500 tok/s → responses in 1–2 s
-  - **Quality**: 70B params vs. the 8B local model, noticeably better at nuance
+  - **Speed**: `qwen/qwen3.8-27b` at ~500 tok/s → responses in 1–2 s
+  - **Quality**: a 27B model (120B for reasoning-heavy questions) vs. the 8B local model, noticeably better at nuance
   - **CPU headroom**: pushing inference to Groq keeps the VPS responsive for anything else it's serving
   - **Cost**: Groq's free tier (30 req/min) easily covers personal-notes scale
 - **Ollama** is the fallback, not because it's secondary in value but because its *use case* is secondary: it only engages when Groq is rate-limited, returns an HTTP error, or the key is missing entirely. `llama3.1:8b` on CPU returns in 5–10 s — acceptable in emergencies and as a disaster-recovery path if Groq ever has an outage.
@@ -79,7 +79,7 @@ Originally this was designed as Ollama-primary. The flip to Groq-primary was a d
 
 ### Cloudflare UA trap (important implementation detail)
 
-`api.groq.com` is fronted by Cloudflare, which returns `HTTP 403 error:1010` ("banned browser signature") for Python's default `Python-urllib/3.x` User-Agent. The responder sets `User-Agent: oso-sync/0.1` explicitly on every Groq request — without this header, the entire Groq path fails and everything falls back to Ollama even when the key is valid.
+`api.groq.com` is fronted by Cloudflare, which returns `HTTP 403 error:1010` ("banned browser signature") for Python's default `Python-urllib/3.x` User-Agent. The responder sets `User-Agent: oso-sync/0.2` explicitly on every Groq request. Without this header, the entire Groq path fails and everything falls back to Ollama even when the key is valid.
 
 If you write additional Python-stdlib code that calls `api.groq.com`, set a `User-Agent` header or you'll hit the same trap. `curl`, `requests`, `httpx`, and `aiohttp` all set their own UA and are not affected.
 
@@ -125,4 +125,4 @@ ssh $VPS 'syncthing cli show connections | python3 -m json.tool'
 - **Bigger models** — swap `OLLAMA_MODEL` or `GROQ_MODEL` in the env file
 - **Answer routing** — responder currently appends in-place; could instead write `notes/answers/<question>.md` for a cleaner vault
 - **Webhook trigger** — replace the systemd timer with a Syncthing `post-sync` hook for sub-second latency
-- **Per-question model selection** — parse a frontmatter hint (`model: groq-70b` vs `model: ollama-8b`) to let the user pick per-question which backend to use
+- **Per-question model selection**: the responder already routes by keyword heuristic (`_looks_like_reasoning()` picks `GROQ_REASONING_MODEL`); parse a frontmatter hint (e.g. `model: ollama-8b`) to let the user pick per-question which backend to use
