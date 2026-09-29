@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sync-memory-to-vps.sh — push ~/MWM/memory/ to the VPS responder context.
+# sync-memory-to-vps.sh — push a local folder of markdown notes to the VPS responder context.
 #
 # The VPS responder (services/responder/responder.py) reads CONTEXT_DIRS which
 # points at ~/services/responder-context/memory/ on the VPS. This script keeps
@@ -12,8 +12,8 @@
 
 set -euo pipefail
 
-VPS="${VPS:-mats@204.168.244.173}"
-SRC="${MEMORY_SRC:-${HOME}/MWM/memory}"
+VPS="${VPS:?set VPS=user@host, e.g. with Environment= in a drop-in for oso-memory-sync.service}"
+SRC="${MEMORY_SRC:-${HOME}/memory}"
 DEST="${MEMORY_DEST:-services/responder-context/memory}"
 
 if [[ ! -d "${SRC}" ]]; then

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # generate-system-facts.sh — snapshot workstation hardware/OS facts into
-# ~/MWM/memory/global/system-facts.md so the OsO responder (Groq + Ollama)
+# $MEMORY_SRC/global/system-facts.md so the OsO responder (Groq + Ollama)
 # can answer "what CPU does this device have", "how much RAM", etc.
 #
 # The output file is markdown picked up by the responder's keyword RAG via
@@ -14,7 +14,9 @@
 
 set -euo pipefail
 
-OUT="${OUT:-${HOME}/MWM/memory/global/system-facts.md}"
+MEMORY_SRC="${MEMORY_SRC:-${HOME}/memory}"
+PROJECTS_DIR="${PROJECTS_DIR:-${HOME}/projects}"
+OUT="${OUT:-${MEMORY_SRC}/global/system-facts.md}"
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 mkdir -p "$(dirname "$OUT")"
@@ -55,8 +57,8 @@ de="${XDG_CURRENT_DESKTOP:-unknown}"
 session="${XDG_SESSION_TYPE:-unknown}"
 
 # Workspace footprint — count, not paths-with-secrets
-projects_count=$(find "${HOME}/MWM/projects" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)
-memory_count=$(find "${HOME}/MWM/memory" -type f -name '*.md' 2>/dev/null | wc -l)
+projects_count=$(find "${PROJECTS_DIR}" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)
+memory_count=$(find "${MEMORY_SRC}" -type f -name '*.md' 2>/dev/null | wc -l)
 
 # Docker services (names only, not exposed ports)
 docker_services=""
@@ -131,8 +133,8 @@ EOF
 
 ## Workspace footprint
 
-- Projects under \`~/MWM/projects/\`: ${projects_count}
-- Memory markdown files under \`~/MWM/memory/\`: ${memory_count}
+- Projects under \`${PROJECTS_DIR}\`: ${projects_count}
+- Memory markdown files under \`${MEMORY_SRC}\`: ${memory_count}
 
 ## Active runtime context
 

@@ -289,7 +289,16 @@ systemctl --user daemon-reload
 systemctl --user enable --now oso-memory-sync.timer
 ```
 
-Before the `enable` step above, edit `ExecStart=` in the shipped units so it points at `<install-dir>/deploy/…` (it is a fixed path from the author's machine), and give the sync script your own target and source: `VPS=user@host` and `MEMORY_SRC=<dir of markdown notes>` (optionally `MEMORY_DEST`), for example with `Environment=` lines in a drop-in for `oso-memory-sync.service`. The built-in defaults in `sync-memory-to-vps.sh` are the author's host and folder, not yours. `oso-system-facts.timer` works the same way: it runs `generate-system-facts.sh` weekly and writes a markdown snapshot of the workstation's CPU, RAM, GPU and OS to `$OUT`, so keep `$OUT` inside the folder the memory sync pushes.
+Before the `enable` step above, add a drop-in (`systemctl --user edit oso-memory-sync.service`) that points `ExecStart=` at your clone and sets your target and source. The shipped units assume the clone is at `~/oso-sync`. `VPS` has no default and the script exits if it is unset; `MEMORY_SRC` defaults to `~/memory` and `MEMORY_DEST` to `services/responder-context/memory`:
+
+```ini
+[Service]
+Environment=VPS=user@host
+Environment=MEMORY_SRC=/path/to/markdown/notes
+ExecStart=
+ExecStart=/path/to/oso-sync/deploy/sync-memory-to-vps.sh
+```
+ `oso-system-facts.timer` works the same way: it runs `generate-system-facts.sh` weekly and writes a markdown snapshot of the workstation's CPU, RAM, GPU and OS to `$OUT`, so keep `$OUT` inside the folder the memory sync pushes (by default it is `$MEMORY_SRC/global/system-facts.md`; `PROJECTS_DIR`, default `~/projects`, is the folder it counts projects in).
 
 Then point `CONTEXT_DIRS` at the remote path on the VPS (e.g. `CONTEXT_DIRS=/home/you/services/responder-context/memory:/home/you/sync/notes`).
 

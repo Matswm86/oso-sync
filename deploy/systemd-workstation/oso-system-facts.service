@@ -4,6 +4,7 @@ Documentation=https://github.com/Matswm86/oso-sync
 
 [Service]
 Type=oneshot
-ExecStart=/home/mm/MWM/projects/oso-sync/deploy/generate-system-facts.sh
+# Point ExecStart at your clone and set VPS / MEMORY_SRC in a drop-in (see README).
+ExecStart=%h/oso-sync/deploy/generate-system-facts.sh
 TimeoutStartSec=120
 Nice=19
