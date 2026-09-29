@@ -1,0 +1,10 @@
+[Unit]
+Description=OsO Sync — hourly incremental refresh of the embedding index
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=false
+
+[Install]
+WantedBy=timers.target

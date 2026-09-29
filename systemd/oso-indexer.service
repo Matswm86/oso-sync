@@ -1,0 +1,16 @@
+[Unit]
+Description=OsO Sync — refresh the responder's embedding index
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/oso-sync/obsidian.env
+WorkingDirectory=%h/services/responder
+ExecStart=/usr/bin/python3 %h/services/responder/index.py
+StandardOutput=journal
+StandardError=journal
+Nice=15
+TimeoutStartSec=3h
+NoNewPrivileges=true
+PrivateTmp=true

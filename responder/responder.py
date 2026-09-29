@@ -37,6 +37,9 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import index  # noqa: E402
+
 NOTES_ASK_DIR = Path(
     os.environ.get("NOTES_ASK_DIR", str(Path.home() / "sync" / "notes" / "ask"))
 )
@@ -141,6 +144,26 @@ def _tokenize(text: str) -> set[str]:
 
 
 def _rag_snippets(question: str, self_path: Path | None) -> str:
+    """Top-K excerpts from the embedding index, else from keyword scoring."""
+    hits = index.search(question, RAG_TOP_K, exclude_path=self_path)
+    if hits:
+        blocks = []
+        for h in hits:
+            fp = Path(h["path"])
+            rel = fp.name
+            for root in CONTEXT_DIRS:
+                try:
+                    rel = str(fp.relative_to(root))
+                    break
+                except ValueError:
+                    continue
+            excerpt = h["text"][:RAG_SNIPPET_CHARS].strip()
+            blocks.append(f"### {rel} (score={h['score']})\n\n{excerpt}")
+        return "\n\n## Notes context (retrieved)\n\n" + "\n\n---\n\n".join(blocks)
+    return _keyword_snippets(question, self_path)
+
+
+def _keyword_snippets(question: str, self_path: Path | None) -> str:
     """Keyword-score markdown files across CONTEXT_DIRS, return top-K excerpts."""
     q_tokens = _tokenize(question)
     if not q_tokens:

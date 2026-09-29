@@ -56,6 +56,7 @@ echo "==> reloading + enabling oso-responder.timer"
 ssh "${VPS}" '
   systemctl --user daemon-reload
   systemctl --user enable --now oso-responder.timer
+  systemctl --user enable --now oso-indexer.timer
   systemctl --user status oso-responder.timer --no-pager | head -10
 '
 

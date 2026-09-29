@@ -28,3 +28,22 @@ rsync -a --delete \
   "${SRC}/" "${VPS}:${DEST}/"
 
 echo "memory synced to ${VPS}:${DEST}/"
+
+# Optional: project docs gathered by collect-project-docs.sh.
+if [[ -n "${PROJECTS_ROOT:-}" && -n "${DOCS_SRC:-}" ]]; then
+  "$(dirname "$0")/collect-project-docs.sh"
+  rsync -a --delete --include='*.md' --exclude='*' \
+    "${DOCS_SRC}/" "${VPS}:${DOCS_DEST:-services/responder-context/docs}/"
+  echo "docs synced to ${VPS}:${DOCS_DEST:-services/responder-context/docs}/"
+fi
+
+# Optional: the static workspace brief the responder loads as CONTEXT_FILE.
+if [[ -n "${BRIEF_SRC:-}" ]]; then
+  rsync -a "${BRIEF_SRC}" "${VPS}:${BRIEF_DEST:-services/responder-context/obsidian-context.md}"
+  echo "brief synced"
+fi
+
+# Optional: refresh the responder's embedding index after new context lands.
+if [[ "${REINDEX:-0}" == "1" ]]; then
+  ssh "${VPS}" 'systemctl --user start --no-block oso-indexer.service' || echo "reindex trigger failed" >&2
+fi
