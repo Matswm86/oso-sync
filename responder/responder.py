@@ -31,9 +31,10 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 NOTES_ASK_DIR = Path(
@@ -53,6 +54,18 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_REASONING_MODEL = os.environ.get(
     "GROQ_REASONING_MODEL", "openai/gpt-oss-120b"
 )
+# Groq rate limits are per model, so another Groq model is tried before the
+# local Ollama fallback. Colon-separated, tried in order.
+GROQ_FALLBACK_MODELS = [
+    m
+    for m in os.environ.get("GROQ_FALLBACK_MODELS", "openai/gpt-oss-20b").split(":")
+    if m.strip()
+]
+# 0 disables the local Ollama fallback: when every Groq model fails the note
+# stays unanswered and is retried on the next timer tick.
+OLLAMA_FALLBACK = os.environ.get("OLLAMA_FALLBACK", "1").strip() != "0"
+# Longest Retry-After (seconds) a 429 may ask for before the model is skipped.
+GROQ_MAX_RETRY_WAIT = float(os.environ.get("GROQ_MAX_RETRY_WAIT", "10"))
 
 BASE_SYSTEM_PROMPT = os.environ.get(
     "SYSTEM_PROMPT",
@@ -230,7 +243,17 @@ def query_ollama(question: str, system_prompt: str) -> str | None:
         return None
 
 
-def query_groq(question: str, system_prompt: str, model: str) -> str | None:
+def _retry_after_seconds(err: HTTPError) -> float | None:
+    raw = err.headers.get("retry-after") if err.headers else None
+    try:
+        return float(raw) if raw is not None else None
+    except ValueError:
+        return None
+
+
+def query_groq(
+    question: str, system_prompt: str, model: str, retry: bool = True
+) -> str | None:
     if not GROQ_API_KEY:
         return None
     payload = {
@@ -265,6 +288,13 @@ def query_groq(question: str, system_prompt: str, model: str) -> str | None:
                     r"<think>.*?</think>\s*", "", content, flags=re.DOTALL
                 ).strip()
             return content
+    except HTTPError as e:
+        wait = _retry_after_seconds(e)
+        log(f"groq failed ({model}): HTTP {e.code} {e.reason} retry-after={wait}")
+        if retry and e.code == 429 and wait is not None and wait <= GROQ_MAX_RETRY_WAIT:
+            time.sleep(wait + 0.5)
+            return query_groq(question, system_prompt, model, retry=False)
+        return None
     except (URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as e:
         log(f"groq failed ({model}): {type(e).__name__}: {e}")
         return None
@@ -291,20 +321,22 @@ def process_file(fpath: Path, dry_run: bool) -> bool:
     system_prompt = _build_system_prompt(question, fpath)
     model = GROQ_REASONING_MODEL if _looks_like_reasoning(question) else GROQ_MODEL
 
-    backend = f"groq:{model}"
-    answer = query_groq(question, system_prompt, model) if GROQ_API_KEY else None
-    if answer is None and GROQ_API_KEY and model != GROQ_MODEL:
-        log(f"reasoning model failed, retrying with {GROQ_MODEL}")
-        answer = query_groq(question, system_prompt, GROQ_MODEL)
-        backend = f"groq:{GROQ_MODEL}"
-    if answer is None:
+    answer, backend = None, ""
+    if GROQ_API_KEY:
+        chain = list(dict.fromkeys([model, GROQ_MODEL, *GROQ_FALLBACK_MODELS]))
+        for m in chain:
+            answer = query_groq(question, system_prompt, m)
+            if answer is not None:
+                backend = f"groq:{m}"
+                break
+    if answer is None and (OLLAMA_FALLBACK or not GROQ_API_KEY):
         if GROQ_API_KEY:
-            log(f"groq failed, falling back to ollama for {fpath.name}")
+            log(f"all groq models failed, falling back to ollama for {fpath.name}")
         answer = query_ollama(question, system_prompt)
-        backend = f"ollama:{OLLAMA_MODEL}"
+        backend = f"ollama:{OLLAMA_MODEL} (small local backup model, check facts)"
 
     if answer is None:
-        log(f"both backends failed for {fpath.name}; leaving unprocessed")
+        log(f"no backend answered {fpath.name}; leaving unprocessed for next tick")
         return False
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
