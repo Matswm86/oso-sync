@@ -27,6 +27,7 @@ Three off-the-shelf pieces, wired together:
            │  - syncthing  │
            │  - ollama     │
            │  - responder  │ (polls notes/ask/ every 60s)
+           │  - indexer    │ (optional, refreshes the notes index hourly)
            │  - [Groq key] │ at /etc/oso-sync/obsidian.env
            └───────────────┘
 ```
@@ -37,8 +38,8 @@ Three off-the-shelf pieces, wired together:
 2. Syncthing propagates the file to the VPS (~seconds over WiFi/LTE)
 3. VPS systemd user timer fires `oso-responder.service` every 60s
 4. Responder finds the new `.md` file in `$NOTES_ASK_DIR` (default `~/sync/notes/ask/`)
-5. Responder builds the system prompt (built-in prompt, the `CONTEXT_FILE` brief, and the top `RAG_TOP_K` keyword-matched note excerpts from `CONTEXT_DIRS`) and POSTs to Groq (**primary**), using the key from the env file. The model is `qwen/qwen3.8-27b`, or `openai/gpt-oss-120b` when the question looks reasoning-heavy. Returns in ~1–2 seconds.
-6. On Groq failure (rate limit, outage, missing key), responder falls back to local Ollama (`llama3.1:8b`) at `127.0.0.1:11434`. ~5–10s on CPU. A failed reasoning-model call is first retried once on the primary Groq model before Ollama is tried.
+5. Responder builds the system prompt (built-in prompt, the `CONTEXT_FILE` brief, and the top `RAG_TOP_K` note excerpts from `CONTEXT_DIRS`, taken from the embedding + BM25 index that `oso-indexer.timer` keeps fresh, or keyword-matched when there is no usable index) and POSTs to Groq (**primary**), using the key from the env file. The model is `qwen/qwen3.8-27b`, or `openai/gpt-oss-120b` when the question looks reasoning-heavy. Returns in ~1–2 seconds.
+6. On Groq failure (rate limit, outage, missing key), responder falls back to local Ollama (`llama3.1:8b`) at `127.0.0.1:11434`. ~5–10s on CPU. A failed call is first tried on the primary Groq model and then on the `GROQ_FALLBACK_MODELS` (default `openai/gpt-oss-20b`), because Groq limits are per model; a short 429 is retried once on the same model. Ollama is only tried after every Groq model has failed, and `OLLAMA_FALLBACK=0` skips it.
 7. Response is appended to the original file with a sentinel marker (the `🤖` label records which backend and model actually answered):
    ```markdown
    ---
@@ -72,8 +73,8 @@ If you need lower latency, swap the timer for a Syncthing `post-sync` hook (see 
   - **Quality**: a 27B model (120B for reasoning-heavy questions) vs. the 8B local model, noticeably better at nuance
   - **CPU headroom**: pushing inference to Groq keeps the VPS responsive for anything else it's serving
   - **Cost**: Groq's free tier (30 req/min) easily covers personal-notes scale
-- **Ollama** is the fallback, not because it's secondary in value but because its *use case* is secondary: it only engages when Groq is rate-limited, returns an HTTP error, or the key is missing entirely. `llama3.1:8b` on CPU returns in 5–10 s — acceptable in emergencies and as a disaster-recovery path if Groq ever has an outage.
-- The responder degrades gracefully: Groq → Ollama → skip (file stays unprocessed, retries on the next 60 s poll cycle).
+- **Ollama** is the fallback, not because it's secondary in value but because its *use case* is secondary: it only engages when every Groq model is rate-limited or returns an error, or the key is missing entirely. `llama3.1:8b` on CPU returns in 5–10 s — acceptable in emergencies and as a disaster-recovery path if Groq ever has an outage.
+- The responder degrades gracefully: Groq (primary, then backup models) → Ollama → skip (file stays unprocessed, retries on the next 60 s poll cycle).
 
 Originally this was designed as Ollama-primary. The flip to Groq-primary was a deliberate decision after end-to-end validation made it clear that on an always-online VPS the slower local model had no practical advantage as the default path. Leaving `GROQ_API_KEY` empty in the env file reverts to Ollama-only mode with a single config change.
 
@@ -111,6 +112,9 @@ Runs comfortably on any small VPS ($5–10/mo range). If your VPS is already hos
 
 # Live tail of the responder
 ssh $VPS 'journalctl --user -fu oso-responder.service'
+
+# Last embedding index refresh
+ssh $VPS 'journalctl --user -u oso-indexer.service -n 20'
 
 # Status of the whole stack
 ./deploy/status.sh $VPS

@@ -4,7 +4,7 @@
 
 Write a question into `notes/ask/foo.md` on your phone, laptop, or desktop. A minute later the answer is appended in-place, the file is fanned out to every device you own, and you've spent approximately zero cents. No vendor lock-in, no custom apps, no subscription — just three open-source tools wired together, with Groq as the fast primary LLM and self-hosted Ollama as the always-there fallback.
 
-**You don't need a VPS.** The responder is a stdlib-only Python script; it runs on whatever "always-on device" you pick — a cheap VPS, a home server, a Raspberry Pi, or just your workstation. See [Deployment modes](#deployment-modes) below for three topologies, from single-laptop local-only up to multi-device cloud mesh.
+**You don't need a VPS.** The responder is a Python script that needs nothing beyond the standard library (only the optional notes index adds `numpy`); it runs on whatever "always-on device" you pick — a cheap VPS, a home server, a Raspberry Pi, or just your workstation. See [Deployment modes](#deployment-modes) below for three topologies, from single-laptop local-only up to multi-device cloud mesh.
 
 ## What it does
 
@@ -41,13 +41,13 @@ The name **OsO** comes from **O**bsidian · **s**yncthing · **O**llama — two 
 
 - **Obsidian** — the note-taking app. Your vault lives in plain markdown files in a folder. That's the only contract. Any markdown-vault app works.
 - **Syncthing** — open-source, end-to-end-encrypted file sync over a P2P mesh. No central server required; the VPS is just "a device that's always on". Zero vendor dependency.
-- **Ollama** — local LLM runtime. On the VPS it runs `llama3.1:8b` on CPU as the fallback when Groq is rate-limited or down. On your workstation you can point at bigger local models; on your phone there is no Ollama — the VPS handles mobile.
+- **Ollama** — local LLM runtime. On the VPS it runs `llama3.1:8b` on CPU as the fallback when Groq is rate-limited or down, and it can also serve `nomic-embed-text` embeddings for the optional notes index (see [Grounding the model in your own context](#grounding-the-model-in-your-own-context)). On your workstation you can point at bigger local models; on your phone there is no Ollama — the VPS handles mobile.
 
-The responder uses **Groq `qwen/qwen3.8-27b` as the primary** LLM: hosted, fast (~500 tok/s), and free for personal-scale use. Questions that look reasoning-heavy (they contain a trigger such as "why", "compare", "trade-off", "design" or "step by step", or run past 1200 characters) go to `openai/gpt-oss-120b` instead; if that call fails, the responder retries once on the primary model. Ollama only engages if Groq fails or the key is unset. This was a deliberate flip from an early "Ollama-primary" design once it was clear that on an always-online VPS with an existing Groq free tier, Groq-primary dominates on every axis (speed, quality, CPU headroom) while Ollama remains invaluable as disaster-recovery insurance.
+The responder uses **Groq `qwen/qwen3.8-27b` as the primary** LLM: hosted, fast (~500 tok/s), and free for personal-scale use. Questions that look reasoning-heavy (they contain a trigger such as "why", "compare", "trade-off", "design" or "step by step", or run past 1200 characters) go to `openai/gpt-oss-120b` instead. Groq rate limits are per model, so when a call fails the responder tries the primary model and then the models in `GROQ_FALLBACK_MODELS` (default `openai/gpt-oss-20b`); a 429 that asks for a wait of `GROQ_MAX_RETRY_WAIT` seconds or less (default 10) is retried once on the same model. Ollama only engages if every Groq model fails or the key is unset, and `OLLAMA_FALLBACK=0` turns even that off so the note waits for the next tick. This was a deliberate flip from an early "Ollama-primary" design once it was clear that on an always-online VPS with an existing Groq free tier, Groq-primary dominates on every axis (speed, quality, CPU headroom) while Ollama remains invaluable as disaster-recovery insurance.
 
 Groq retires models from time to time (it retired `llama-3.3-70b-versatile` and `deepseek-r1-distill-llama-70b`, the earlier defaults here, which made every request fail with HTTP 404). If your `obsidian.env` still names a retired model, set `GROQ_MODEL` and `GROQ_REASONING_MODEL` to ones Groq currently serves.
 
-The clever bit: none of these three tools know about each other. They're glued together by a ~340-line Python script (`responder/responder.py`) that polls the synced folder and writes answers back. The glue has no dependencies outside the Python stdlib.
+The clever bit: none of these three tools know about each other. They're glued together by a ~400-line Python script (`responder/responder.py`) that polls the synced folder and writes answers back. The glue has no dependencies outside the Python stdlib; the optional notes index (`responder/index.py`) adds `numpy`.
 
 ## Deployment modes
 
@@ -95,10 +95,15 @@ oso-sync/
 ├── README.md                  this file
 ├── responder/
 │   ├── responder.py           the glue: polls notes/ask/, adds context, queries Groq/Ollama, appends answer
+│   ├── index.py               optional embedding + BM25 index over CONTEXT_DIRS (build it by running the script)
+│   ├── eval_retrieval.py      scores retrieval against a JSON list of control questions
+│   ├── embed_trial.sh         builds a second index with another embedding model and compares it to the live one
 │   └── .env.example           template for /etc/oso-sync/obsidian.env on the VPS
 ├── systemd/
 │   ├── oso-responder.service  systemd user unit for the responder (uses %h specifier)
-│   └── oso-responder.timer    60s cadence timer
+│   ├── oso-responder.timer    60s cadence timer
+│   ├── oso-indexer.service    systemd user unit that refreshes the embedding index
+│   └── oso-indexer.timer      hourly refresh timer
 ├── syncthing/
 │   └── DEVICES.md             template ledger for the paired-devices mesh
 ├── docs/
@@ -108,7 +113,8 @@ oso-sync/
     ├── install-vps.sh         one-shot deploy from the repo to your VPS
     ├── status.sh              whole-stack health check
     ├── obsidian-context.md.example   template for the static workspace brief (CONTEXT_FILE)
-    ├── sync-memory-to-vps.sh  rsync a local folder of markdown notes to the host for CONTEXT_DIRS
+    ├── sync-memory-to-vps.sh  rsync a local folder of markdown notes (and optionally project docs) to the host for CONTEXT_DIRS
+    ├── collect-project-docs.sh       gather project READMEs and CLAUDE.md files into one folder for that sync
     ├── generate-system-facts.sh      weekly hardware/OS snapshot (markdown) for the responder's RAG
     └── systemd-workstation/   workstation-side user units: oso-memory-sync.{service,timer} (48h),
                                oso-system-facts.{service,timer} (weekly)
@@ -220,7 +226,7 @@ From the workstation, run the deploy script:
 ./deploy/install-vps.sh $VPS
 ```
 
-This rsyncs `responder/` to `~/services/responder/` on the VPS, installs the systemd units under `~/.config/systemd/user/`, enables the 60s timer, and runs a smoke-test.
+This rsyncs `responder/` to `~/services/responder/` on the VPS, installs the systemd units under `~/.config/systemd/user/`, enables the 60s responder timer and the hourly indexer timer, and runs a smoke-test.
 
 ### 5. Phone — pair with host manually (optional)
 
@@ -248,7 +254,7 @@ The Beta-Binomial model...
 <!-- responder-processed -->
 ```
 
-The `🤖` tag records which backend and model actually answered. `groq:<model>` means the primary path (a reasoning-heavy question shows `groq:openai/gpt-oss-120b`). `ollama:<model>` means Groq failed and the fallback took over: check `journalctl --user -u oso-responder.service -n 50` on the host (via SSH or directly) for the reason.
+The `🤖` tag records which backend and model actually answered. `groq:<model>` means Groq answered: the primary model, `groq:openai/gpt-oss-120b` for a reasoning-heavy question, or a backup model after a failure. `ollama:<model> (small local backup model, check facts)` means every Groq model failed and the fallback took over: check `journalctl --user -u oso-responder.service -n 50` on the host (via SSH or directly) for the reason.
 
 ## Configuration
 
@@ -260,16 +266,19 @@ The responder reads all config from environment variables loaded via the systemd
 | `GROQ_API_KEY` | *(unset)* | primary LLM; unset → local-only (Ollama-only) mode |
 | `GROQ_MODEL` | `qwen/qwen3.8-27b` | primary model |
 | `GROQ_REASONING_MODEL` | `openai/gpt-oss-120b` | model for questions that look reasoning-heavy |
+| `GROQ_FALLBACK_MODELS` | `openai/gpt-oss-20b` | colon-separated Groq models tried, in order, when the ones above fail |
+| `GROQ_MAX_RETRY_WAIT` | `10` | longest `Retry-After` (seconds) a 429 may ask for and still be retried once on the same model |
 | `OLLAMA_URL` | `http://127.0.0.1:11434/api/generate` | fallback Ollama endpoint |
 | `OLLAMA_MODEL` | `llama3.1:8b` | fallback model |
+| `OLLAMA_FALLBACK` | `1` | `0` = never answer with Ollama; the note waits for the next tick |
 | `SYSTEM_PROMPT` | *(built-in prompt)* | replaces the base system prompt |
 | `MAX_TOKENS` | `2000` | max tokens per answer |
 | `CONTEXT_FILE` | `/etc/oso-sync/obsidian-context.md` | static workspace brief prepended to every prompt |
-| `CONTEXT_DIRS` | *(falls back to `CONTEXT_DIR`)* | colon-separated dirs for keyword-RAG (earlier = higher priority) |
+| `CONTEXT_DIRS` | *(falls back to `CONTEXT_DIR`)* | colon-separated dirs of markdown notes to retrieve from (with the keyword fallback, earlier = scanned first) |
 | `CONTEXT_DIR` | `~/sync/notes` | legacy single-dir RAG path |
 | `RAG_TOP_K` | `5` | note excerpts retrieved per question |
 | `RAG_SNIPPET_CHARS` | `600` | characters per retrieved excerpt |
-| `RAG_MAX_FILES` | `400` | max markdown files scanned per question |
+| `RAG_MAX_FILES` | `400` | max markdown files scanned per question by the keyword fallback |
 
 Leave `GROQ_API_KEY` unset to run 100% local-only. If both backends fail, the responder logs it and leaves the file unprocessed, and it retries on the next poll cycle. `NOTES_ASK_DIR` must be an absolute path (or unset): the responder does not expand `$HOME` in env values.
 
@@ -278,7 +287,24 @@ Leave `GROQ_API_KEY` unset to run 100% local-only. If both backends fail, the re
 The default system prompt is generic. To make answers actually useful, populate two things:
 
 1. **`CONTEXT_FILE`** — a short workspace brief (identity, projects, conventions) that is prepended to every prompt. `install-vps.sh` uploads `~/backup/obsidian-context.md` to `/etc/oso-sync/obsidian-context.md` automatically. See `deploy/obsidian-context.md.example`.
-2. **`CONTEXT_DIRS`** — any number of markdown dirs scanned per-question with keyword-overlap scoring. Put the richest / smallest dirs first; later dirs are only searched if the `RAG_MAX_FILES` budget is still open.
+2. **`CONTEXT_DIRS`** — any number of markdown dirs the responder searches per question for the `RAG_TOP_K` best-matching excerpts. There are two ways it does that:
+   - **Embedding index (preferred).** `responder/index.py` splits each note into chunks on markdown headings (about `RAG_CHUNK_CHARS` each), embeds them with an Ollama model (`nomic-embed-text` by default) and writes the vectors to `RAG_INDEX_DIR`. At question time the responder ranks chunks twice, by embedding similarity and by BM25 over the chunk text plus the file name, merges the two rankings by reciprocal rank fusion and returns at most one chunk per note. A refresh only re-embeds notes whose size or modification time changed, and `oso-indexer.timer` runs it every hour (first run 5 minutes after boot). Changing `EMBED_MODEL` rebuilds the index from scratch. Answered question files (the ones ending in the responder marker) and paths matching `RAG_EXCLUDE` are left out. You need `numpy` for the `python3` the unit runs and `ollama pull nomic-embed-text` on the host; embedding goes to your own Ollama, so indexing sends nothing off the machine.
+   - **Keyword fallback.** With no index, no `numpy` or an unreachable embedding backend, the responder scores markdown files by keyword overlap instead. Put the richest / smallest dirs first: later dirs are only searched if the `RAG_MAX_FILES` budget is still open.
+
+The index has its own knobs, read by `responder/index.py` from the same env file:
+
+| Var | Default | Meaning |
+|---|---|---|
+| `EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model |
+| `OLLAMA_EMBED_URL` | `http://127.0.0.1:11434/api/embed` | Ollama embedding endpoint |
+| `RAG_INDEX_DIR` | `~/services/responder-context/index` | where the index is written and read |
+| `RAG_EXCLUDE` | `archive:archived:logs:ask:*sync-conflict*` | colon-separated globs; a note is skipped if its path or any folder name in it matches |
+| `RAG_CHUNK_CHARS` | `1500` | target size of one indexed chunk |
+| `RAG_MAX_CHUNKS_PER_FILE` | `10` | chunks kept per note |
+| `RAG_EMBED_BATCH` | `32` | chunks sent to Ollama per embedding call |
+| `EMBED_DOC_PREFIX` / `EMBED_QUERY_PREFIX` | `search_document: ` / `search_query: ` | text prefixes the embedding model expects (the defaults are `nomic-embed-text`'s) |
+
+To check retrieval, write a JSON list of control questions, `[{"q": "...", "expect": ["part-of-the-right-note's-path"]}]`, and run `python3 responder/eval_retrieval.py questions.json` on the host. It prints the rank of the first expected note for each question, then hit@`RAG_TOP_K` and mean reciprocal rank; `--keyword` scores the keyword fallback instead. `responder/embed_trial.sh MODEL TRIAL_INDEX_DIR QUESTIONS.json REPORT.md` builds a second index with another embedding model and scores it next to the live one on the same questions, without touching the live index or the responder's settings (set `TRIAL_DOC_PREFIX` and `TRIAL_QUERY_PREFIX` if the model expects text prefixes).
 
 If you keep a notes/memory repo outside the synced folder, push it to the VPS on a timer. The `deploy/sync-memory-to-vps.sh` script + `deploy/systemd-workstation/oso-memory-sync.{service,timer}` units in this repo do exactly that (every 48h). Install on the workstation:
 
@@ -300,14 +326,21 @@ ExecStart=/path/to/oso-sync/deploy/sync-memory-to-vps.sh
 ```
  `oso-system-facts.timer` works the same way: it runs `generate-system-facts.sh` weekly and writes a markdown snapshot of the workstation's CPU, RAM, GPU and OS to `$OUT`, so keep `$OUT` inside the folder the memory sync pushes (by default it is `$MEMORY_SRC/global/system-facts.md`; `PROJECTS_DIR`, default `~/projects`, is the folder it counts projects in).
 
-Then point `CONTEXT_DIRS` at the remote path on the VPS (e.g. `CONTEXT_DIRS=/home/you/services/responder-context/memory:/home/you/sync/notes`).
+`sync-memory-to-vps.sh` can push more than the notes folder, each part switched on by its own variable:
+
+- `PROJECTS_ROOT` (a folder with one dir per project) plus `DOCS_SRC` (an output folder): first runs `deploy/collect-project-docs.sh`, which copies each project's `README.md` and `CLAUDE.md` into `DOCS_SRC` as `<project>--README.md` and so on, then rsyncs `DOCS_SRC` to `DOCS_DEST` (default `services/responder-context/docs`). The collector deletes the `*.md` files already in `DOCS_SRC` first, so give it a folder of its own, and it skips and reports any file that matches a secret pattern instead of copying it. `SKIP_PROJECTS` (space-separated names) leaves projects out and `EXTRA_FILES` adds single files.
+- `BRIEF_SRC`: pushes the static workspace brief to `BRIEF_DEST` (default `services/responder-context/obsidian-context.md`).
+- `REINDEX=1`: starts `oso-indexer.service` on the host afterwards, so new notes are searchable without waiting for the hourly timer.
+
+Then point `CONTEXT_DIRS` at the remote paths on the VPS (e.g. `CONTEXT_DIRS=/home/you/services/responder-context/memory:/home/you/services/responder-context/docs:/home/you/sync/notes`).
 
 ## Observability
 
 ```bash
 ./deploy/status.sh $VPS                              # whole-stack health check
 ssh $VPS 'journalctl --user -fu oso-responder.service'    # live tail
-ssh $VPS 'systemctl --user list-timers oso-responder.timer'
+ssh $VPS 'systemctl --user list-timers oso-responder.timer oso-indexer.timer'
+ssh $VPS 'journalctl --user -u oso-indexer.service -n 20'    # last embedding index refresh
 ssh $VPS 'syncthing cli show connections | python3 -m json.tool'
 ```
 
@@ -343,9 +376,11 @@ Local-only mode is the cheapest; a Pi 4/5 or reused old laptop as the always-on 
 - [x] Groq primary + Ollama fallback (Cloudflare UA workaround baked in to `responder/query_groq()`)
 - [x] Responder sentinel deduplication (new + legacy markers) so historic files from earlier versions aren't double-answered
 - [x] Context grounding v2 (2026-04-14) — responder names projects (Belliq, TrakTek) correctly from workspace memory; memory rsync to VPS every 48h via `oso-memory-sync.timer`
-- [x] Reasoning-model routing: questions that look reasoning-heavy go to `openai/gpt-oss-120b`, with a retry on the primary model if it fails
+- [x] Reasoning-model routing: questions that look reasoning-heavy go to `openai/gpt-oss-120b`, with the primary and backup Groq models behind it if it fails
 - [x] Weekly workstation system-facts snapshot (`oso-system-facts.timer`) so the responder can answer device and spec questions
 - [x] Groq defaults moved to `qwen/qwen3.8-27b` + `openai/gpt-oss-120b` (2026-09-28) after Groq retired `llama-3.3-70b-versatile`
+- [x] Groq backup models (`GROQ_FALLBACK_MODELS`) tried before Ollama, short 429s retried once (2026-09-29)
+- [x] Embedding index over `CONTEXT_DIRS` with BM25 fusion, refreshed hourly by `oso-indexer.timer`, plus a retrieval eval and an embedding-model trial script (2026-09-29)
 - [ ] Optional: per-folder system prompts (e.g. `notes/ask-code/` uses a coder prompt, `notes/ask-writing/` a writing-coach prompt), extension point, not built yet
 
 ## Known limitations
