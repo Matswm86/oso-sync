@@ -107,11 +107,11 @@ If any of 1–11 is missed, the symptom is identical: the app shows "disconnecte
 
 When the phone is on cellular, it sits behind **carrier-grade NAT (CGNAT)** which blocks incoming connections and often drops long-lived outbound TCP sessions. Direct phone ↔ VPS over cellular **rarely works** on any major mobile carrier. Instead, Syncthing automatically falls back to its **public relay pool** — roughly 1,700 community-run relay servers that proxy encrypted blobs between peers.
 
-From the VPS logs you will typically see incoming connections to your phone device ID from IPs like:
+From the VPS logs you will typically see incoming connections to your phone device ID from addresses such as:
 
-- `149.7.162.131` (Cogent, US) — a common Syncthing relay
-- `185.35.202.206` (EU hosting) — another relay
-- `51.x.x.x`, `95.x.x.x`, etc. — various community relays
+- an address in a US backbone provider's range (Cogent): a common Syncthing relay
+- an address in a European hosting provider's range: another relay
+- various other community relays on assorted hosting ranges
 
 These are **not attackers or misconfigurations**. They are the Syncthing relay pool doing its job. Relay traffic is still end-to-end TLS encrypted between phone and VPS — the relay only sees opaque bytes, not your file contents. Latency is slightly higher (small files ~1–3 seconds via relay vs. <1 second direct LAN) and data usage is slightly higher (~2× overhead because the encrypted payload traverses two network legs instead of one), but for a notes-only vault with small markdown files the difference is imperceptible.
 

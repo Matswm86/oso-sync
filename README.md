@@ -1,8 +1,12 @@
 # OsO Sync
 
-**O**bsidian · **S**yncthing · **O**llama — a three-piece, zero-cloud, always-on personal AI notes stack.
+**O**bsidian · **S**yncthing · **O**llama — a three-piece, self-hosted, always-on personal AI notes stack.
 
 Write a question into `notes/ask/foo.md` on your phone, laptop, or desktop. A minute later the answer is appended in-place, the file is fanned out to every device you own, and you've spent approximately zero cents. No vendor lock-in, no custom apps, no subscription — just three open-source tools wired together, with Groq as the fast primary LLM and self-hosted Ollama as the always-there fallback.
+
+![A question file in notes/ask/ before and after the responder ran, with the responder's output](docs/screenshot.png)
+
+*A real run in local-only mode: the question as written, the same file after the responder appended the answer, and the responder's own output.*
 
 **You don't need a VPS.** The responder is a Python script that needs nothing beyond the standard library (only the optional notes index adds `numpy`); it runs on whatever "always-on device" you pick — a cheap VPS, a home server, a Raspberry Pi, or just your workstation. See [Deployment modes](#deployment-modes) below for three topologies, from single-laptop local-only up to multi-device cloud mesh.
 
@@ -43,7 +47,7 @@ The name **OsO** comes from **O**bsidian · **s**yncthing · **O**llama — two 
 - **Syncthing** — open-source, end-to-end-encrypted file sync over a P2P mesh. No central server required; the VPS is just "a device that's always on". Zero vendor dependency.
 - **Ollama** — local LLM runtime. On the VPS it runs `llama3.1:8b` on CPU as the fallback when Groq is rate-limited or down, and it can also serve `nomic-embed-text` embeddings for the optional notes index (see [Grounding the model in your own context](#grounding-the-model-in-your-own-context)). On your workstation you can point at bigger local models; on your phone there is no Ollama — the VPS handles mobile.
 
-The responder uses **Groq `qwen/qwen3.8-27b` as the primary** LLM: hosted, fast (~500 tok/s), and free for personal-scale use. Questions that look reasoning-heavy (they contain a trigger such as "why", "compare", "trade-off", "design" or "step by step", or run past 1200 characters) go to `openai/gpt-oss-120b` instead. Groq rate limits are per model, so when a call fails the responder tries the primary model and then the models in `GROQ_FALLBACK_MODELS` (default `openai/gpt-oss-20b`); a 429 that asks for a wait of `GROQ_MAX_RETRY_WAIT` seconds or less (default 10) is retried once on the same model. Ollama only engages if every Groq model fails or the key is unset, and `OLLAMA_FALLBACK=0` turns even that off so the note waits for the next tick. This was a deliberate flip from an early "Ollama-primary" design once it was clear that on an always-online VPS with an existing Groq free tier, Groq-primary dominates on every axis (speed, quality, CPU headroom) while Ollama remains invaluable as disaster-recovery insurance.
+The responder uses **Groq `qwen/qwen3.8-27b` as the primary** LLM: hosted, fast (~500 tok/s), and free for personal-scale use. Questions that look reasoning-heavy (they contain a trigger such as "why", "compare", "trade-off", "design" or "step by step", or run past 1200 characters) go to `openai/gpt-oss-120b` instead. Groq rate limits are per model, so when a call fails the responder tries the primary model and then the models in `GROQ_FALLBACK_MODELS` (default `openai/gpt-oss-20b`); a 429 that asks for a wait of `GROQ_MAX_RETRY_WAIT` seconds or less (default 10) is retried once on the same model. Ollama only engages if every Groq model fails or the key is unset. With a key set, `OLLAMA_FALLBACK=0` turns that fallback off so the note waits for the next tick; with no key, Ollama is the only backend and always answers. This was a deliberate flip from an early "Ollama-primary" design once it was clear that on an always-online VPS with an existing Groq free tier, Groq-primary dominates on every axis (speed, quality, CPU headroom) while Ollama remains invaluable as disaster-recovery insurance.
 
 Groq retires models from time to time (it retired `llama-3.3-70b-versatile` and `deepseek-r1-distill-llama-70b`, the earlier defaults here, which made every request fail with HTTP 404). If your `obsidian.env` still names a retired model, set `GROQ_MODEL` and `GROQ_REASONING_MODEL` to ones Groq currently serves.
 
@@ -108,7 +112,8 @@ oso-sync/
 │   └── DEVICES.md             template ledger for the paired-devices mesh
 ├── docs/
 │   ├── architecture.md        deeper walkthrough, data flow, extension points
-│   └── phone-pairing.md       manual phone ↔ VPS pairing (Syncthing app steps)
+│   ├── phone-pairing.md       manual phone ↔ VPS pairing (Syncthing app steps)
+│   └── screenshot.png         real responder run, shown at the top of this file
 └── deploy/
     ├── install-vps.sh         one-shot deploy from the repo to your VPS
     ├── status.sh              whole-stack health check
@@ -270,7 +275,7 @@ The responder reads all config from environment variables loaded via the systemd
 | `GROQ_MAX_RETRY_WAIT` | `10` | longest `Retry-After` (seconds) a 429 may ask for and still be retried once on the same model |
 | `OLLAMA_URL` | `http://127.0.0.1:11434/api/generate` | fallback Ollama endpoint |
 | `OLLAMA_MODEL` | `llama3.1:8b` | fallback model |
-| `OLLAMA_FALLBACK` | `1` | `0` = never answer with Ollama; the note waits for the next tick |
+| `OLLAMA_FALLBACK` | `1` | `0` = when every Groq model fails, leave the note for the next tick instead of answering with Ollama (no effect while `GROQ_API_KEY` is unset: Ollama then answers) |
 | `SYSTEM_PROMPT` | *(built-in prompt)* | replaces the base system prompt |
 | `MAX_TOKENS` | `2000` | max tokens per answer |
 | `CONTEXT_FILE` | `/etc/oso-sync/obsidian-context.md` | static workspace brief prepended to every prompt |
